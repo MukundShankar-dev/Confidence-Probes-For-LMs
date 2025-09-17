@@ -1,0 +1,24 @@
+seed: 42
+model:
+model_id: openai/gpt-oss-20b
+dtype: bf16
+device_map: auto
+max_new_tokens: 64
+use_router_probs: true # if model exposes MoE router signals; ignored otherwise
+probe:
+layers: [16, 24, 32] # layers to tap for last-token features
+reducer: "concat" # concat | mean | last
+model: "logreg" # logreg | mlp
+train_size: 8000 # per split (adjust to your GPU/time)
+threshold: 0.5 # gate threshold on probe score
+rag:
+backend: "wikipedia" # wikipedia | faiss
+top_k: 5
+max_passage_len: 384
+reanswer_prompt: "use_evidence_or_refuse"
+data:
+dataset: "squad" # squad | nq_open | triviaqa
+split: "validation"
+limit: 12000 # cap for quick runs
+logging:
+wandb: false
