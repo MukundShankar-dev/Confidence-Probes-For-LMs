@@ -26,6 +26,7 @@ def main(cfg: Cfg, limit_override: int = None, verbose: bool = True):
     ds = load_qa(cfg.data.dataset, cfg.data.split, limit_override or cfg.data.limit)
 
     preds, refs = [], []
+    rows = []
     total_tokens = 0
     total_time = 0.0
 
@@ -58,8 +59,26 @@ def main(cfg: Cfg, limit_override: int = None, verbose: bool = True):
                 bar.set_postfix(tokens=gen_len, t=f"{dt:.2f}s", tps=f"{tokps:.1f}", vram=f"{mem:.1f}GB")
             except Exception:
                 bar.set_postfix(tokens=gen_len, t=f"{dt:.2f}s", tps=f"{tokps:.1f}")
+        
+        rows.append({
+            "idx": idx,
+            "question": q,
+            "prediction": ans.strip(),
+            "references": gold,
+            "gen_tokens": int(new_ids.shape[-1]),
+            "gen_time": round(dt, 3),
+        })
 
     print(evaluate_batch(preds, refs))
+
+    if cfg.save_jsonl:
+        import json, os
+        os.makedirs(os.path.dirname(cfg.save_jsonl) or ".", exist_ok=True)
+        with open(cfg.save_jsonl, "w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        print(f"[baseline] wrote per-example outputs to {cfg.save_jsonl}")
+
     if total_time > 0:
         print(f"[baseline] avg toks/ex: {total_tokens/len(preds):.1f} | avg time/ex: {total_time/len(preds):.2f}s | overall toks/s: {total_tokens/total_time:.1f}")
 
@@ -67,6 +86,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/default.yaml")
     ap.add_argument("--limit", type=int, default=None, help="override dataset size for quick debug")
+    ap.add_argument("--save_jsonl", type=str, default=None, help="path to write per-example outputs")
     args = ap.parse_args()
     cfg = Cfg.load(args.config)
     main(cfg, limit_override=args.limit)

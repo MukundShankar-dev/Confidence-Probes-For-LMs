@@ -62,4 +62,4 @@ def load_qa(name: str, split: str, limit: int):
 
     if limit:
         ds = ds.select(range(min(limit, len(ds))))
-        return ds
+    return ds
