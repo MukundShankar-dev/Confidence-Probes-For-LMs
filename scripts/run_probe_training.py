@@ -7,6 +7,8 @@ from src.models.gpt_oss import GPTOSS
 from src.data.datasets import load_qa, exact_match
 from src.probes.features import last_token_features, logits_entropy
 from src.probes.train import Probe
+from sklearn.model_selection import train_test_split
+from src.probes.train import Probe
 
 
 PROMPT_FMT = """Answer concisely.\nQ: {q}\nA:"""
@@ -40,13 +42,13 @@ def main(cfg: Cfg):
         labels.append(1 if exact_match(ans_text, gold) else 0)
         X, y = np.array(feats), np.array(labels)
     probe = Probe(cfg.probe.model)
-    probe.fit(X, y)
-    # quick AUC sanity
-    try:
-        print("AUC:", roc_auc_score(y, probe.predict_proba(X)))
-    except Exception:
-        pass
-    probe.save("probe.joblib")
+    Xtr, Xval, ytr, yval = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    probe.fit(Xtr, ytr)
+
+    p_val_raw = probe.predict_score(Xval)
+    probe.fit_calibrator(p_val_raw, yval)
+
+    probe.save("probe.joblib", "calib.joblib")
 
 
 if __name__ == "__main__":

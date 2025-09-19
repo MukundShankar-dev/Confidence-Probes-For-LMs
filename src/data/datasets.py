@@ -1,10 +1,35 @@
 from datasets import load_dataset
 from typing import Dict, Iterable
 import random
+import re, string
 
+def _normalize(s: str) -> str:
+    def remove_articles(t): return re.sub(r"\b(a|an|the)\b", " ", t)
+    def white_space_fix(t): return " ".join(t.split())
+    def remove_punc(t): return "".join(ch for ch in t if ch not in set(string.punctuation))
+    def lower(t): return t.lower()
+    return white_space_fix(remove_articles(remove_punc(lower(s))))
 
-def NORMALIZE(s): return " ".join(s.lower().split())
+def squad_em(pred: str, refs) -> bool:
+    if not isinstance(refs, (list, tuple)): refs = [refs]
+    p = _normalize(pred)
+    return any(p == _normalize(r) for r in refs)
 
+def squad_f1(pred: str, refs) -> float:
+    if not isinstance(refs, (list, tuple)): refs = [refs]
+    def toks(s): return _normalize(s).split()
+    p = toks(pred)
+    best = 0.0
+    for r in refs:
+        g = toks(r)
+        if not p and not g: best = max(best, 1.0); continue
+        common = set(p) & set(g)
+        num_same = sum(min(p.count(w), g.count(w)) for w in common)
+        if num_same == 0: best = max(best, 0.0); continue
+        prec, rec = num_same/len(p), num_same/len(g)
+        f1 = 2*prec*rec/(prec+rec)
+        best = max(best, f1)
+    return best
 
 def load_qa(name: str, split: str, limit: int):
     if name == "squad":
@@ -38,11 +63,3 @@ def load_qa(name: str, split: str, limit: int):
     if limit:
         ds = ds.select(range(min(limit, len(ds))))
         return ds
-
-
-def exact_match(pred: str, refs: Iterable[str]) -> bool:
-    p = NORMALIZE(pred)
-    for r in refs:
-        if NORMALIZE(r) in p or p in NORMALIZE(r):
-            return True
-    return False
