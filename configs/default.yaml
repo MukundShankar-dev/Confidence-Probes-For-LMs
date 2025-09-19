@@ -6,6 +6,7 @@ model:
   device_map: auto
   max_new_tokens: 64
   use_router_probs: true  # ignored if model doesn't expose MoE router probs
+  # cache_dir: ./language_models/transformers   # (optional) set via env or here
 
 probe:
   layers: [16, 24, 32]
@@ -13,8 +14,10 @@ probe:
   model: "logreg"          # logreg | mlp
   train_size: 8000
 
+# default threshold for gating (can override via CLI)
 threshold: 0.5
 
+# not used in closed-book; leaving here for future RAG experiments
 rag:
   backend: "wikipedia"     # wikipedia | faiss
   top_k: 5
@@ -24,7 +27,16 @@ rag:
 data:
   dataset: "squad"         # squad | nq_open | triviaqa
   split: "validation"
-  limit: 12000
+  limit: 12000             # cap to keep runs predictable (lower for quick debug)
 
 logging:
   wandb: false
+
+# optional gate defaults (scripts also accept CLI flags)
+gate:
+  variant: "baseline"       # baseline | mice
+  base_layers: [16, 24, 32]
+  mice_layers: [16, 24, 32]
+  include_entropy: true
+  n_best: 3
+  probe_type: "cls"         # cls | sc

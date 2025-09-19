@@ -54,6 +54,29 @@ class GPTOSS:
             enc["attention_mask"] = torch.ones_like(enc["input_ids"])
         return enc
 
+    def get_unembedding(self):
+        """
+        Return the unembedding (lm_head) weight and bias for logit-lens style features.
+        Most models tie embeddings; bias may be None.
+        """
+        W = self.model.get_output_embeddings().weight  # [V, H]
+        b = getattr(self.model.get_output_embeddings(), "bias", None)
+        return W, b
+
+    @torch.no_grad()
+    def prefill_states(self, prompt: str):
+        """
+        Run a prefill-only forward to get hidden states before any new tokens are generated.
+        """
+        inputs = self._apply_chat_template(prompt)
+        out = self.model(
+            **inputs,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+        return inputs, out.hidden_states  # tuple(len = L+1)
+
+
     @torch.no_grad()
     def generate_with_states(self, prompt: str):
         inputs = self._apply_chat_template(prompt)
