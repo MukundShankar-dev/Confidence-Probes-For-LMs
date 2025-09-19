@@ -13,7 +13,7 @@ PROMPT_FMT = (
   "Q: {q}\nA:"
 )
 
-def main(cfg: Cfg, limit_override: int = None, verbose: bool = True):
+def main(cfg: Cfg, limit_override: int = None, save_jsonl: str = None, verbose: bool = True):
     hf_logging.set_verbosity_info()
     hf_logging.enable_propagation()
 
@@ -71,13 +71,13 @@ def main(cfg: Cfg, limit_override: int = None, verbose: bool = True):
 
     print(evaluate_batch(preds, refs))
 
-    if cfg.save_jsonl:
+    if save_jsonl:
         import json, os
         os.makedirs(os.path.dirname(cfg.save_jsonl) or ".", exist_ok=True)
-        with open(cfg.save_jsonl, "w", encoding="utf-8") as f:
+        with open(save_jsonl, "w", encoding="utf-8") as f:
             for row in rows:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
-        print(f"[baseline] wrote per-example outputs to {cfg.save_jsonl}")
+        print(f"[baseline] wrote per-example outputs to {save_jsonl}")
 
     if total_time > 0:
         print(f"[baseline] avg toks/ex: {total_tokens/len(preds):.1f} | avg time/ex: {total_time/len(preds):.2f}s | overall toks/s: {total_tokens/total_time:.1f}")
@@ -89,4 +89,4 @@ if __name__ == "__main__":
     ap.add_argument("--save_jsonl", type=str, default=None, help="path to write per-example outputs")
     args = ap.parse_args()
     cfg = Cfg.load(args.config)
-    main(cfg, limit_override=args.limit)
+    main(cfg, limit_override=args.limit, save_jsonl=args.save_jsonl)
