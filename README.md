@@ -3,6 +3,10 @@
 White-box pipeline for: hidden-state probe → confidence gate → RAG/refusal, built around GPT‑OSS‑20B.
 Code currently would work on mac silicone but really don't recommend. Will work much more efficiently if ran on a GPU. 
 
+Current specs: 
+    - GPT oss 20b
+    - TriviaQA task (metrics are in `results/`).
+
 ## Other settings (for cache)
 ```mkdir -p language_models/{transformers,datasets,hf_home,xdg,torch,torch_extensions,sentence-transformers}
 
