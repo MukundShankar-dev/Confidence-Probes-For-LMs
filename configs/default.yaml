@@ -4,7 +4,7 @@ model:
   model_id: openai/gpt-oss-20b
   dtype: bfloat16
   device_map: auto
-  max_new_tokens: 256
+  max_new_tokens: 512
   use_router_probs: true  # ignored if model doesn't expose MoE router probs
   # cache_dir: ./language_models/transformers   # (optional) set via env or here
 
