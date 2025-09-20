@@ -43,36 +43,41 @@ def main(cfg: Cfg, limit_override: int = None, save_jsonl: str = None, verbose: 
 
         start = inp["input_ids"].shape[-1]
         new_ids = gen.sequences[:, start:]
-        ans = model.decode(new_ids[0])
+        analysis_txt, final_txt = model.split_channels(new_ids[0]) if not model.force_final_prefix else ("", None)
+        ans = (final_txt or model.decode(new_ids[0])).strip()
 
         gen_len = int(new_ids.shape[-1])
         total_tokens += gen_len
         total_time += dt
         tokps = (gen_len / dt) if dt > 0 else float("inf")
 
+        em_i = 1 if squad_em(ans, gold) else 0
+        f1_i = squad_f1(ans, gold)
+
         preds.append(ans)
         refs.append(gold)
 
+        if idx == 0:
+            raw = model.tok.decode(new_ids[0], skip_special_tokens=False)
+            print("[debug] tail:", raw[-300:].replace("\n", "\\n"))
+
         if verbose and (idx % 10 == 0):
-            # quick device/mem pulse
             try:
                 mem = torch.cuda.max_memory_allocated() / 1e9
                 bar.set_postfix(tokens=gen_len, t=f"{dt:.2f}s", tps=f"{tokps:.1f}", vram=f"{mem:.1f}GB")
             except Exception:
                 bar.set_postfix(tokens=gen_len, t=f"{dt:.2f}s", tps=f"{tokps:.1f}")
-        
-        em_i = 1 if squad_em(ans, gold) else 0
-        f1_i = squad_f1(ans, gold)
 
         rows.append({
             "idx": idx,
             "question": q,
             "prediction": ans.strip(),
             "em": em_i,
-            "f1_i": f1_i,
+            "f1": f1_i,
             "references": gold,
             "gen_tokens": int(new_ids.shape[-1]),
             "gen_time": round(dt, 3),
+            "analysis": analysis_txt,
         })
 
     print(evaluate_batch(preds, refs))

@@ -1,3 +1,4 @@
+# src/models/gpt_oss.py
 from typing import Dict, List, Optional, Tuple
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList
@@ -8,17 +9,16 @@ if torch.cuda.is_available():
     print(f"[CUDA] {props.name} | {props.total_memory/1e9:.1f} GB")
 
 
-def _encode_or_none(tok, s: str) -> Optional[List[int]]:
+def _enc(tok, s: str) -> List[int]:
     ids = tok.encode(s, add_special_tokens=False)
-    return ids if isinstance(ids, list) and len(ids) > 0 else None
+    return ids if isinstance(ids, list) else []
 
 
 class _HarmonyStop(StoppingCriteria):
-    """Stop when <|end|> or <|return|> token sequence appears at the end."""
-    def __init__(self, tok, end_ids: List[int], ret_ids: List[int]):
-        self.end_ids = end_ids
-        self.ret_ids = ret_ids
-        self.maxlen = max(len(end_ids), len(ret_ids))
+    def __init__(self, tok):
+        self.end_ids = _enc(tok, "<|end|>")
+        self.ret_ids = _enc(tok, "<|return|>")
+        self.maxlen = max(len(self.end_ids), len(self.ret_ids))
 
     def _endswith(self, tail: List[int], pat: List[int]) -> bool:
         L = len(pat)
@@ -40,9 +40,10 @@ class GPTOSS:
         device_map: str = "auto",
         max_new_tokens: int = 128,
         use_router_probs: bool = True,
-        cache_dir: str = None,
-        use_chat_template: bool = True,         # Harmony format on
-        reasoning_effort: str = "low",          # "low" | "medium" | "high"
+        cache_dir: Optional[str] = None,
+        use_chat_template: bool = True,      # Harmony on
+        reasoning_effort: str = "low",
+        force_final_prefix: bool = True,     # <- start directly in final
     ):
         torch_dtype = getattr(torch, dtype) if hasattr(torch, dtype) else torch.float16
         self.tok = AutoTokenizer.from_pretrained(model_id, use_fast=True, cache_dir=cache_dir)
@@ -59,35 +60,33 @@ class GPTOSS:
         self.use_router_probs = use_router_probs
         self.use_chat_template = use_chat_template
         self.reasoning_effort = reasoning_effort
+        self.force_final_prefix = force_final_prefix
 
         if getattr(self.model.config, "pad_token_id", None) is None:
             self.model.config.pad_token_id = self.tok.eos_token_id
 
-        # Detect Harmony markers as TOKEN IDS (robust across templates)
-        # Try several common encodings for final; pick the first that exists.
+        # Detect usable "final" marker token sequences
         final_candidates = [
+            "<|channel|>final<|message|>",
             "<|assistant|><|final|>",
             "<|final|>",
-            "<|channel|>final<|message|>",
         ]
         self.final_ids: Optional[List[int]] = None
         for cand in final_candidates:
-            enc = _encode_or_none(self.tok, cand)
-            if enc:
-                self.final_ids = enc
+            ids = _enc(self.tok, cand)
+            if ids:
+                self.final_ids = ids
                 break
 
-        # End markers
-        self.end_ids  = _encode_or_none(self.tok, "<|end|>")    or []
-        self.ret_ids  = _encode_or_none(self.tok, "<|return|>") or []
+        # End/return markers & stopper
+        self.end_ids = _enc(self.tok, "<|end|>")
+        self.ret_ids = _enc(self.tok, "<|return|>")
+        self.stopper = StoppingCriteriaList([_HarmonyStop(self.tok)])
 
-        # Stopping (halts as soon as model emits end/return)
-        self.stopper = StoppingCriteriaList([_HarmonyStop(self.tok, self.end_ids, self.ret_ids)])
-
-    # ---------- Harmony inputs ----------
+    # -------------------- input builders --------------------
 
     def _build_inputs_chat(self, user_msg: str) -> Dict[str, torch.Tensor]:
-        assert hasattr(self.tok, "apply_chat_template"), "Tokenizer must provide Harmony chat template for gpt-oss."
+        assert hasattr(self.tok, "apply_chat_template"), "Tokenizer must provide Harmony chat template."
         msgs = [
             {"role": "system", "content": f"Reasoning: {self.reasoning_effort}"},
             {"role": "user",   "content": user_msg},
@@ -110,29 +109,38 @@ class GPTOSS:
     def _build_inputs(self, user_msg: str) -> Dict[str, torch.Tensor]:
         return self._build_inputs_chat(user_msg) if self.use_chat_template else self._build_inputs_plain(user_msg)
 
-    # ---------- token-level final extraction ----------
+    def _append_final_prefix(self, enc: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Append the tokenizer's 'final' marker so generation starts inside final channel."""
+        if not self.force_final_prefix or not self.final_ids:
+            return enc
+        ii, am = enc["input_ids"], enc["attention_mask"]
+        final = torch.tensor(self.final_ids, device=ii.device).unsqueeze(0).repeat(ii.size(0), 1)
+        enc["input_ids"] = torch.cat([ii, final], dim=1)
+        enc["attention_mask"] = torch.cat([am, torch.ones_like(final)], dim=1)
+        return enc
+
+    # -------------------- channel utilities --------------------
 
     def _slice_final_ids(self, generated_ids: torch.Tensor) -> torch.Tensor:
-        """
-        Return only the token span belonging to the Harmony 'final' channel:
-        [ ... <final_ids>  (content...)  (<return>|<end>|<start>) ... ]
-        If no final marker found, return the original ids.
-        """
+        """Return only the span belonging to the Harmony 'final' channel (token-level)."""
         seq = generated_ids.tolist() if isinstance(generated_ids, torch.Tensor) else list(generated_ids)
         if not self.final_ids:
             return generated_ids
 
-        # find last occurrence of final_ids
         F = self.final_ids
         n, m = len(seq), len(F)
         start_ix = -1
-        for i in range(max(0, n - 3 * (m + 1)) , n - m + 1):  # small scan window near the end
+        # FULL SCAN for the last occurrence of F
+        i = 0
+        while i <= n - m:
             if seq[i:i+m] == F:
                 start_ix = i + m
+                i += m
+            else:
+                i += 1
         if start_ix == -1:
-            return generated_ids  # no final marker; fall back
+            return generated_ids
 
-        # find nearest boundary after start_ix
         def find_next(pat: List[int]) -> int:
             L = len(pat)
             if L == 0: return -1
@@ -141,7 +149,7 @@ class GPTOSS:
                     return j
             return -1
 
-        stops = [x for x in [find_next(self.ret_ids), find_next(self.end_ids)] if x != -1]
+        stops = [x for x in (find_next(self.ret_ids), find_next(self.end_ids)) if x != -1]
         end_ix = min(stops) if stops else n
         if end_ix <= start_ix:
             end_ix = n
@@ -149,7 +157,39 @@ class GPTOSS:
         kept = seq[start_ix:end_ix]
         return torch.tensor(kept, device=generated_ids.device, dtype=generated_ids.dtype)
 
-    # ---------- public APIs ----------
+    def split_channels(self, generated_ids: torch.Tensor) -> Tuple[str, str]:
+        """
+        Return (analysis_text, final_text) by decoding WITH specials and splitting on Harmony markers.
+        Falls back to token-level slicing for final if no text markers found.
+        """
+        txt = self.tok.decode(generated_ids, skip_special_tokens=False)
+
+        M_A = "<|channel|>analysis<|message|>"
+        M_Fs = ["<|channel|>final<|message|>", "<|assistant|><|final|>", "<|final|>"]
+        M_ENDS = ["<|return|>", "<|end|>", "<|start|>"]
+
+        anal, final = "", ""
+        last_f = -1
+        picked = None
+        for mf in M_Fs:
+            j = txt.rfind(mf)
+            if j > last_f:
+                last_f = j; picked = mf
+        if last_f != -1:
+            tail = txt[last_f + len(picked):]
+            k = min([i for i in (tail.find(t) for t in M_ENDS) if i != -1], default=len(tail))
+            final = tail[:k].strip()
+
+            ai = txt.find(M_A)
+            if ai != -1 and ai < last_f:
+                anal = txt[ai + len(M_A): last_f].strip()
+            return anal, final
+
+        # fallback: token-sliced final only
+        final_ids = self._slice_final_ids(generated_ids)
+        return "", self.tok.decode(final_ids, skip_special_tokens=True).strip()
+
+    # -------------------- public APIs --------------------
 
     def get_unembedding(self):
         W = self.model.get_output_embeddings().weight
@@ -165,9 +205,10 @@ class GPTOSS:
     @torch.no_grad()
     def generate_with_states(self, prompt: str):
         inputs = self._build_inputs(prompt)
+        inputs = self._append_final_prefix(inputs)  # <- start in final if enabled
         gen = self.model.generate(
             **inputs,
-            max_new_tokens=self.max_new_tokens,   # 128–256 is usually enough at Reasoning: low
+            max_new_tokens=self.max_new_tokens,   # 128–256 is usually enough with Reasoning: low
             do_sample=False,
             no_repeat_ngram_size=3,
             repetition_penalty=1.05,
@@ -177,11 +218,14 @@ class GPTOSS:
             pad_token_id=self.tok.eos_token_id,
             eos_token_id=self.tok.eos_token_id,
             use_cache=True,
-            stopping_criteria=self.stopper,       # stop on <|end|> / <|return|>
+            stopping_criteria=self.stopper,
         )
         return inputs, gen
 
     def decode(self, ids: torch.Tensor) -> str:
-        # slice out the final-channel content (token-level), then decode cleanly
+        # If we forced final, ids already start inside final -> direct decode is fine.
+        if self.force_final_prefix:
+            return self.tok.decode(ids, skip_special_tokens=True).strip()
+        # Otherwise, extract final channel
         final_ids = self._slice_final_ids(ids)
         return self.tok.decode(final_ids, skip_special_tokens=True).strip()

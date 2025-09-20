@@ -82,28 +82,24 @@ def load_qa(name: str, split: str, limit: int):
         ds = ds.map(_fmt, remove_columns=ds.column_names)
 
     elif name == "triviaqa":
-        # HuggingFace dataset name is "trivia_qa", config "unfiltered"
         ds = load_dataset("trivia_qa", "unfiltered", split=split)
 
         def _fmt(ex):
-            # ex["answer"] may be dict with keys {"value": str, "aliases": [str, ...]}
-            refs = []
-            ans = ex.get("answer", {})
-            if isinstance(ans, dict):
-                v = ans.get("value")
-                if isinstance(v, str) and v: refs.append(v)
-                aliases = ans.get("aliases", [])
-                if isinstance(aliases, (list, tuple)):
-                    refs.extend([a for a in aliases if isinstance(a, str) and a])
-            elif isinstance(ans, str) and ans:
-                refs.append(ans)
-            return {
-                "question": ex["question"],
-                "answers": _dedupe_nonempty(refs),
-                # keep blank for closed-book; you can wire search/evidence later if needed
-                "context": "",
-            }
+            ans = ex["answer"]
+            cand = [ans["value"]]
+            for k in ("aliases", "normalized_aliases"):
+                if k in ans and ans[k]:
+                    cand.extend(a for a in ans[k] if isinstance(a, str))
+            # dedupe (case-insensitive), keep order
+            seen = set(); out = []
+            for a in cand:
+                s = a.strip()
+                key = s.lower()
+                if s and key not in seen:
+                    seen.add(key); out.append(s)
+            return {"question": ex["question"], "answers": out, "context": ""}
         ds = ds.map(_fmt, remove_columns=ds.column_names)
+
 
     else:
         raise ValueError(f"Unknown dataset {name}")
