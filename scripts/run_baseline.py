@@ -5,13 +5,14 @@ from transformers.utils import logging as hf_logging
 from src.conf.config import Cfg
 from src.models.gpt_oss import GPTOSS
 from src.data.datasets import load_qa
-from src.eval.metrics import evaluate_batch
+from src.eval.metrics import evaluate_batch, squad_em, squad_f1
 
 PROMPT_FMT = (
   "Answer with the short factual answer only. "
   "Do not include any extra words or punctuation.\n"
-  "Q: {q}\nA:"
+  "Q: {q}\nA: "
 )
+
 
 def main(cfg: Cfg, limit_override: int = None, save_jsonl: str = None, verbose: bool = True):
     hf_logging.set_verbosity_info()
@@ -60,10 +61,15 @@ def main(cfg: Cfg, limit_override: int = None, save_jsonl: str = None, verbose: 
             except Exception:
                 bar.set_postfix(tokens=gen_len, t=f"{dt:.2f}s", tps=f"{tokps:.1f}")
         
+        em_i = 1 if squad_em(ans, gold) else 0
+        f1_i = squad_f1(ans, gold)
+
         rows.append({
             "idx": idx,
             "question": q,
             "prediction": ans.strip(),
+            "em": em_i,
+            "f1_i": f1_i,
             "references": gold,
             "gen_tokens": int(new_ids.shape[-1]),
             "gen_time": round(dt, 3),
@@ -73,7 +79,7 @@ def main(cfg: Cfg, limit_override: int = None, save_jsonl: str = None, verbose: 
 
     if save_jsonl:
         import json, os
-        os.makedirs(os.path.dirname(cfg.save_jsonl) or ".", exist_ok=True)
+        os.makedirs(os.path.dirname(save_jsonl) or ".", exist_ok=True)
         with open(save_jsonl, "w", encoding="utf-8") as f:
             for row in rows:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
