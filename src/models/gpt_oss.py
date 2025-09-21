@@ -356,21 +356,108 @@ class GPTOSS:
 
     @torch.no_grad()
     def generate_with_states(self, prompt: str):
+        """
+        Final-only (force_final_prefix=True): start directly in final channel (fast path).
+        Think-then-final with Harmony (use_chat_template=True, force_final_prefix=False):
+        1) Generate in analysis until <|final|> or analysis_cap.
+        2) If no <|final|> appeared, append <|final|> and continue to get the final.
+        Textual mode (use_chat_template=False): just a plain generate.
+        """
         inputs = self._build_inputs(prompt)
 
-        if self.force_final_prefix:
-            # Final-only: append final marker and guard against empty generations
+        # ---------- Final-only: keep your existing fast path ----------
+        if self.use_chat_template and self.force_final_prefix:
             inputs = self._append_final_prefix(inputs)
             start_len = int(inputs["input_ids"].shape[-1])
-            stopper = StoppingCriteriaList([self.stopper_finalonly])
             self.stopper_finalonly.set_start_len(start_len)
-        else:
-            # Think-then-final: start in analysis channel, then wait for <|final|>
-            inputs = self._append_analysis_prefix(inputs)
-            start_len = int(inputs["input_ids"].shape[-1])
-            self._think_guard.set_start_len(start_len)
-            stopper = self.stopper_think
+            stopper = StoppingCriteriaList([self.stopper_finalonly])
 
+            gen = self.model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=False,
+                no_repeat_ngram_size=3,
+                repetition_penalty=1.05,
+                return_dict_in_generate=True,
+                output_scores=True,
+                output_hidden_states=True,
+                pad_token_id=self.tok.eos_token_id,
+                eos_token_id=self.tok.eos_token_id,
+                use_cache=True,
+                stopping_criteria=stopper,
+                min_new_tokens=2,
+            )
+            return inputs, gen
+
+        # ---------- Think-then-final with Harmony (two-stage) ----------
+        if self.use_chat_template and not self.force_final_prefix:
+            # Stage-1: start in analysis channel
+            inputs1 = self._append_analysis_prefix({k: v.clone() for k, v in inputs.items()})
+            start_len1 = int(inputs1["input_ids"].shape[-1])
+            # reset guard
+            self._think_guard.final_start = None
+            self._think_guard.set_start_len(start_len1)
+            stopper1 = self.stopper_think
+
+            gen1 = self.model.generate(
+                **inputs1,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=False,
+                no_repeat_ngram_size=3,
+                repetition_penalty=1.05,
+                return_dict_in_generate=True,
+                output_scores=True,
+                output_hidden_states=True,
+                pad_token_id=self.tok.eos_token_id,
+                eos_token_id=self.tok.eos_token_id,
+                use_cache=True,
+                stopping_criteria=stopper1,
+            )
+
+            seq1 = gen1.sequences  # [1, L1]
+            # If <|final|> appeared during stage-1, we're done (guard found it)
+            if self._think_guard.final_start is not None:
+                return inputs, gen1
+
+            # Stage-2: no final seen → append <|final|> (and an optional space) to seq1 and continue
+            append_ids = []
+            if self.final_ids:
+                append_ids.extend(self.final_ids)
+            if self.append_space_after_final and self._space_ids:
+                append_ids.extend(self._space_ids)
+            if append_ids:
+                extra = torch.tensor(append_ids, device=seq1.device, dtype=seq1.dtype).unsqueeze(0)
+                input_ids2 = torch.cat([seq1, extra], dim=1)
+            else:
+                input_ids2 = seq1  # extremely unlikely (no known final token)
+
+            attn2 = torch.ones_like(input_ids2)
+            start_len2 = int(input_ids2.shape[-1])
+            # Stop after <|end|>/<|return|> or after final_allowance tokens (whichever first)
+            stopper2 = self._HarmonyStopAfter(self.tok, min_new_tokens_after_start=2) if False else None
+            # The above local class reference won't exist; reuse the existing stopper:
+            stopper2 = self.stopper_finalonly
+            self.stopper_finalonly.set_start_len(start_len2)
+
+            gen2 = self.model.generate(
+                input_ids=input_ids2,
+                attention_mask=attn2,
+                max_new_tokens=max(2, self.final_allowance),
+                do_sample=False,
+                no_repeat_ngram_size=3,
+                repetition_penalty=1.05,
+                return_dict_in_generate=True,
+                output_scores=True,
+                output_hidden_states=False,  # optional; stage-2 HS usually not needed for eval
+                pad_token_id=self.tok.eos_token_id,
+                eos_token_id=self.tok.eos_token_id,
+                use_cache=True,
+                stopping_criteria=StoppingCriteriaList([self.stopper_finalonly]),
+            )
+            # Return stage-2 result (it already includes the whole prefix). `inputs` stays the original.
+            return inputs, gen2
+
+        # ---------- Plain-text mode (no Harmony) ----------
         gen = self.model.generate(
             **inputs,
             max_new_tokens=self.max_new_tokens,
@@ -378,19 +465,10 @@ class GPTOSS:
             no_repeat_ngram_size=3,
             repetition_penalty=1.05,
             return_dict_in_generate=True,
-            output_scores=True,           # keep on if you need entropy features
-            output_hidden_states=True,    # keep on for probe features; off for speed
+            output_scores=True,
+            output_hidden_states=True,
             pad_token_id=self.tok.eos_token_id,
             eos_token_id=self.tok.eos_token_id,
             use_cache=True,
-            stopping_criteria=stopper,
-            min_new_tokens=2,             # safety floor to avoid empties
         )
         return inputs, gen
-
-    def decode(self, ids: torch.Tensor) -> str:
-        if self.force_final_prefix:
-            return self.tok.decode(ids, skip_special_tokens=True).strip()
-        # Think mode: slice to final channel
-        final_ids = self._slice_final_ids(ids)
-        return self.tok.decode(final_ids, skip_special_tokens=True).strip()
