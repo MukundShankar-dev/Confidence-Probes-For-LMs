@@ -10,7 +10,7 @@
 #SBATCH --error=logs/gpt-oss-medium%j.err
 
 source ~/.bashrc
-conda activate easi3r
+conda activate llm
 
 # Low
 # python -m scripts.run_baseline \
