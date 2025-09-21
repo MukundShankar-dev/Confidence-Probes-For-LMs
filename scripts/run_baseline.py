@@ -155,8 +155,8 @@ def main(cfg: Cfg, args):
     force_final = not args.allow_thinking  # final-only if we DON'T allow thinking
     reasoning = args.reasoning
 
-    use_chat = not True
-    force_final = not args.allow_thinking  # final-only if we DON'T allow thinking
+    use_chat = True
+    force_final = False
 
     model = GPTOSS(
         cfg.model.model_id,
@@ -191,11 +191,13 @@ def main(cfg: Cfg, args):
 
         start = inp["input_ids"].shape[-1]
         new_ids = gen.sequences[:, start:]
-        if args.allow_thinking:
-            analysis_txt, ans = model.split_channels(new_ids[0])
-        else:
-            analysis_txt, ans = "", model.tok.decode(new_ids[0])
+        analysis_txt, ans = model.split_channels(new_ids[0])
         ans = ans.strip()
+        # if args.allow_thinking:
+        #     analysis_txt, ans = model.split_channels(new_ids[0])
+        # else:
+        #     analysis_txt, ans = "", model.tok.decode(new_ids[0])
+        # ans = ans.strip()
         # raw_with_specials = model.tok.decode(new_ids[0], skip_special_tokens=False)
         # raw_plain = model.tok.decode(new_ids[0], skip_special_tokens=True)
 
