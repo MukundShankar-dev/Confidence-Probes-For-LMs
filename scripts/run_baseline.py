@@ -187,6 +187,10 @@ def main(cfg: Cfg, args):
     limit = args.limit or cfg.data.limit
     ds = load_qa(cfg.data.dataset, cfg.data.split, limit)
 
+    if args.num_shards > 1:
+        ds = ds.shard(num_shards=args.num_shards, index=args.shard_id, contiguous=True)
+        print(f"[shard] Using shard {args.shard_id}/{args.num_shards} with {len(ds)} examples")
+
     preds, refs, rows = [], [], []
     total_tokens, total_time = 0, 0.0
 
@@ -249,7 +253,7 @@ def main(cfg: Cfg, args):
         })
 
     overall_metrics = evaluate_batch(preds, refs)
-    
+
     if total_time > 0 and len(preds) > 0:
         print(f"[baseline] avg toks/ex: {total_tokens/len(preds):.1f} | "
               f"avg time/ex: {total_time/len(preds):.2f}s | "
@@ -284,8 +288,10 @@ if __name__ == "__main__":
     ap.add_argument("--max_new_tokens", type=int, default=None, help="override cfg.model.max_new_tokens")
     ap.add_argument("--final_allowance", type=int, default=32, help="(think mode) tokens allowed inside final")
     ap.add_argument("--analysis_cap", type=int, default=512, help="(think mode) cap tokens before final")
-    ap.add_argument("--thinking_mode", choices=["off", "textual", "harmony"], default="off", help="off=final-only; textual=Analysis/Final delimiters (no Harmony); harmony=think->final with Harmony"
-                    )
+    ap.add_argument("--thinking_mode", choices=["off", "textual", "harmony"], default="off", help="off=final-only; textual=Analysis/Final delimiters (no Harmony); harmony=think->final with Harmony")
+
+    ap.add_argument("--num_shards", type=int, default=1, help="for distributed eval (slurm)")
+    ap.add_argument("--shard_id", type=int, default=0, help="shard index for distributed eval (slurm)")
 
     args = ap.parse_args()
     cfg = Cfg.load(args.config)

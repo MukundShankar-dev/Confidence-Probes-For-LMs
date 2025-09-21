@@ -5,42 +5,30 @@
 #SBATCH --account=vulcan-abhinav
 #SBATCH --gres=gpu:rtxa6000:1
 #SBATCH --mem=64G
-#SBATCH --time=6:00:00
-#SBATCH --output=logs/gpt-oss-medium%j.out
-#SBATCH --error=logs/gpt-oss-medium%j.err
+#SBATCH --time=24:00:00
+#SBATCH -o logs/%x_%A_%a.out
+#SBATCH -e logs/%x_%A_%a.err
+#SBATCH --array=0-24
+
+set -euo pipefail
 
 source ~/.bashrc
 conda activate llm
 
-# Low
-# python -m scripts.run_baseline \
-#   --config configs/default.yaml \
-#   --thinking_mode harmony \
-#   --prompt_style fewshot_fixed \
-#   --reasoning low \
-#   --max_new_tokens 256 \
-#   --analysis_cap 512 \
-#   --final_allowance 32 \
-#   --save_jsonl results/harmony_low.json
+reasoning=medium
+
+num_shards=$SLURM_ARRAY_TASK_COUNT
+shard_id=$SLURM_ARRAY_TASK_ID
 
 # Medium
 python -m scripts.run_baseline \
   --config configs/default.yaml \
   --thinking_mode harmony \
   --prompt_style fewshot_fixed \
-  --reasoning medium \
+  --reasoning $reasoning \
   --max_new_tokens 512 \
   --analysis_cap 512 \
   --final_allowance 32 \
-  --save_jsonl results/baseline_harmony_medium.json
-
-# High
-# python -m scripts.run_baseline \
-#   --config configs/default.yaml \
-#   --thinking_mode harmony \
-#   --prompt_style fewshot_fixed \
-#   --reasoning high \
-#   --max_new_tokens 256 \
-#   --analysis_cap 512 \
-#   --final_allowance 32 \
-#   --save_jsonl results/harmony_high.json
+  --num_shards $num_shards \
+  --shard_id $shard_id \
+  --save_jsonl results/harmony_${reasoning}_shard${shard_id}.json
