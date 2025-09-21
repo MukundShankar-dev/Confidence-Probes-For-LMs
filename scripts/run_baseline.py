@@ -248,19 +248,21 @@ def main(cfg: Cfg, args):
             "analysis": analysis_txt,
         })
 
-    print(evaluate_batch(preds, refs))
+    overall_metrics = evaluate_batch(preds, refs)
+    
+    if total_time > 0 and len(preds) > 0:
+        print(f"[baseline] avg toks/ex: {total_tokens/len(preds):.1f} | "
+              f"avg time/ex: {total_time/len(preds):.2f}s | "
+              f"overall toks/s: {total_tokens/total_time:.1f}")
 
+    print(overall_metrics)
+    rows.append({"overall": True, **overall_metrics})
     if args.save_jsonl:
         os.makedirs(os.path.dirname(args.save_jsonl) or ".", exist_ok=True)
         with open(args.save_jsonl, "w", encoding="utf-8") as f:
             for row in rows:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
         print(f"[baseline] wrote per-example outputs to {args.save_jsonl}")
-
-    if total_time > 0 and len(preds) > 0:
-        print(f"[baseline] avg toks/ex: {total_tokens/len(preds):.1f} | "
-              f"avg time/ex: {total_time/len(preds):.2f}s | "
-              f"overall toks/s: {total_tokens/total_time:.1f}")
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
