@@ -1,11 +1,22 @@
 from datasets import load_dataset
 from typing import Dict, Iterable, List
 import re, string
+import unicodedata
 
-# -------------------- normalization + metrics --------------------
+UNICODE_DASHES = "\u2010\u2011\u2012\u2013\u2014\u2212\u2015"
+UNICODE_SPACES = "\u00A0\u2007\u202F"
 
 def _normalize(s: str) -> str:
-    def remove_articles(t): return re.sub(r"\b(a|an|the)\b", " ", t)
+    # 1) NFKC fold (turns many unicode punct to ASCII)
+    s = unicodedata.normalize("NFKC", s)
+    # 2) normalize odd spaces/dashes
+    for ch in UNICODE_SPACES:
+        s = s.replace(ch, " ")
+    for ch in UNICODE_DASHES:
+        s = s.replace(ch, " ")
+    # 3) your existing steps
+    def remove_articles(t): return re.sub(
+        r"\b(a|an|the)\b", " ", t, flags=re.IGNORECASE)
     def white_space_fix(t): return " ".join(t.split())
     def remove_punc(t): return "".join(ch for ch in t if ch not in set(string.punctuation))
     def lower(t): return t.lower()

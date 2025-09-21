@@ -150,13 +150,25 @@ def main(cfg: Cfg, args):
         props = torch.cuda.get_device_properties(i)
         print(f"[CUDA] {props.name} | {props.total_memory/1e9:.1f} GB")
 
-    # Resolve model knobs (CLI overrides cfg)
     max_new_tokens = args.max_new_tokens or cfg.model.max_new_tokens
     force_final = not args.allow_thinking  # final-only if we DON'T allow thinking
     reasoning = args.reasoning
 
-    use_chat = True
-    force_final = False
+    if args.thinking_mode == "off":
+        use_chat = True
+        force_final
+        parse_harmony = False
+        parse_textual = False
+    elif args.thinking_mode == "textual":
+        use_chat = False
+        force_final = False
+        parse_harmony = False
+        parse_textual = True
+    else:
+        use_chat = True
+        force_final = False
+        parse_harmony = True
+        parse_textual = False
 
     model = GPTOSS(
         cfg.model.model_id,
@@ -191,23 +203,17 @@ def main(cfg: Cfg, args):
 
         start = inp["input_ids"].shape[-1]
         new_ids = gen.sequences[:, start:]
-        analysis_txt, ans = model.split_channels(new_ids[0])
-        ans = ans.strip()
-        # if args.allow_thinking:
-        #     analysis_txt, ans = model.split_channels(new_ids[0])
-        # else:
-        #     analysis_txt, ans = "", model.tok.decode(new_ids[0])
-        # ans = ans.strip()
-        # raw_with_specials = model.tok.decode(new_ids[0], skip_special_tokens=False)
-        # raw_plain = model.tok.decode(new_ids[0], skip_special_tokens=True)
 
-        # if args.allow_thinking:
-            # We ignore Harmony markers entirely and parse text delimiters
-            # analysis_txt, final_txt = parse_analysis_final(raw_plain)
-            # ans = final_txt.strip()
-        # else:
-            # Final-only mode: just use the plain decode
-            # analysis_txt, ans = "", raw_plain.strip()
+        if parse_harmony:
+            analysis_txt, ans = model.split_channels(new_ids[0])
+            ans = ans.strip()
+        elif parse_textual:
+            raw_plain = model.tok.decode(new_ids[0], skip_special_tokens=True)
+            analysis_txt, ans = parse_analysis_final(raw_plain)
+            ans = ans.strip()
+        else:
+            analysis_txt, ans = "", model.tok.decode(
+                new_ids[0], skip_special_tokens=True).strip()
 
         gen_len = int(new_ids.shape[-1])
         total_tokens += gen_len
@@ -276,6 +282,8 @@ if __name__ == "__main__":
     ap.add_argument("--max_new_tokens", type=int, default=None, help="override cfg.model.max_new_tokens")
     ap.add_argument("--final_allowance", type=int, default=32, help="(think mode) tokens allowed inside final")
     ap.add_argument("--analysis_cap", type=int, default=512, help="(think mode) cap tokens before final")
+    ap.add_argument("--thinking_mode", choices=["off", "textual", "harmony"], default="off", help="off=final-only; textual=Analysis/Final delimiters (no Harmony); harmony=think->final with Harmony"
+                    )
 
     args = ap.parse_args()
     cfg = Cfg.load(args.config)
