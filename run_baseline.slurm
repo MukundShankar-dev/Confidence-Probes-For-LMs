@@ -31,4 +31,4 @@ python -m scripts.run_baseline \
   --final_allowance 32 \
   --num_shards $num_shards \
   --shard_id $shard_id \
-  --save_jsonl results/harmony_${reasoning}_shard${shard_id}.json
+  --save_jsonl results/triviaqa/harmony_${reasoning}_shard${shard_id}.json
