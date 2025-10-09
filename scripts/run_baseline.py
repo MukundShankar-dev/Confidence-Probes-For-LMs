@@ -15,6 +15,8 @@ from src.models.gemma12b import Gemma12B
 from src.data.datasets import load_qa
 from src.eval.metrics import evaluate_batch, squad_em, squad_f1
 
+import math
+
 # Allow fast math
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -27,20 +29,34 @@ ZERO_SHOT_FINAL_ONLY = (
     "Q: {q}\nA: "
 )
 
-FEWSHOT_FIXED_FINAL_ONLY = """You are answering trivia questions. Give only the short answer.
+FEWSHOT_FIXED_FINAL_ONLY = """You are answering trivia questions.
+Return a single JSON object with fields:
+- "answer": the short factual span (1–5 words, no punctuation)
+- "confidence": your probability (0.0–1.0) that the answer is correct
+
+Calibration guidance:
+- Report your true probability; do NOT inflate.
+- Overconfidence is penalized by proper scoring (Brier). If unsure, choose a lower value.
+- If you do not know, use an educated guess with appropriately low confidence.
 
 Q: Who wrote Hamlet?
-A: William Shakespeare
+{{"answer": "William Shakespeare", "confidence": 0.95}}
+
 Q: What is the capital of France?
-A: Paris
+{{"answer": "Paris", "confidence": 0.92}}
+
 Q: In which year did the Titanic sink?
-A: 1912
-Q: The chemical symbol for gold is?
-A: Au
+{{"answer": "1912", "confidence": 0.80}}
+
+Q: Which element has the symbol 'Xx'?
+{{"answer": "Unknown", "confidence": 0.15}}
+
 Q: Which planet is known as the Red Planet?
-A: Mars
+{{"answer": "Mars", "confidence": 0.85}}
+
 Q: {EVAL_QUESTION}
-A: """
+"""
+
 
 FEWSHOT_FIXED_THINKING = """You are answering trivia questions. Be concise.
 
@@ -79,6 +95,55 @@ Analysis:
 - Briefly reason about the answer.
 Final:
 """
+
+def softmax_entropy(logits):
+    # logits: torch.FloatTensor [V]
+    probs = torch.nn.functional.softmax(logits, dim=-1)
+    # numerical guard: clamp in log
+    logp = torch.log(probs.clamp_min(1e-12))
+    ent = -(probs * logp).sum().item()
+    return float(ent)
+
+def extract_answer_and_model_conf(text: str):
+    """
+    Try to parse a JSON object like:
+      {"answer": "Paris", "confidence": 0.92}
+    If that fails, fall back to plain text and look for trailing [CONF=0.92].
+    Returns (answer_text, model_confidence or None).
+    """
+    t = text.strip()
+
+    # 1) try fenced or raw JSON
+    # remove code fences if present
+    if t.startswith("```"):
+        t = t.strip("`")
+        # keep content after first newline
+        t = t.split("\n", 1)[-1].strip()
+    # grab the first {...} block
+    try:
+        start = t.index("{")
+        end   = t.rindex("}") + 1
+        obj = json.loads(t[start:end])
+        ans = (obj.get("answer") or "").strip()
+        mc  = obj.get("confidence", None)
+        try:
+            mc = float(mc) if mc is not None else None
+        except Exception:
+            mc = None
+        return ans, mc
+    except Exception:
+        pass
+
+    # 2) fallback: strip a trailing [CONF=...]
+    import re
+    m = re.search(r"(.*?)(?:\s*\[CONF\s*=\s*([0-9.]+)\s*\]\s*)?$", t)
+    if m:
+        ans = m.group(1).strip()
+        mc = float(m.group(2)) if m.group(2) is not None else None
+        return ans, mc
+
+    # 3) final fallback: whole string is the answer
+    return t, None
 
 def build_prompt(q: str, style: str, allow_thinking: bool, fewshot_file: str = None) -> str:
     """Build the evaluation prompt based on style + whether we allow thinking."""
@@ -236,7 +301,28 @@ def main(cfg: Cfg, args):
             analysis_txt, ans = parse_analysis_final(raw_plain)
             ans = ans.strip()
         else:
-            analysis_txt, ans = "", model.tok.decode(new_ids[0], skip_special_tokens=True).strip()
+            raw_text = model.tok.decode(new_ids[0], skip_special_tokens=True).strip()
+            analysis_txt, ans = "", raw_text
+            ans_parsed, model_conf = extract_answer_and_model_conf(raw_text)
+            if ans_parsed:
+                ans = ans_parsed
+            ans = ans.strip()
+
+        entropy_last = None
+        entropy_mean = None
+        conf_entropy = None
+
+        try:
+            scores = gen.scores  # list of length = #generated tokens; each is [batch, vocab]
+            if scores and len(scores) > 0:
+                ents = [softmax_entropy(s[0].float()) for s in scores]  # batch size = 1
+                entropy_last = float(ents[-1])
+                entropy_mean = float(sum(ents) / len(ents))
+                # simple mapping from entropy to [0,1] "confidence" (lower entropy -> higher confidence)
+                # matches your earlier approach exp(-H)
+                conf_entropy = float(math.exp(-entropy_last))
+        except Exception:
+            pass
 
         gen_len = int(new_ids.shape[-1])
         total_tokens += gen_len
@@ -250,7 +336,11 @@ def main(cfg: Cfg, args):
 
         if idx == 0 or args.debug_first:
             print("[debug] head:", ans[:200].replace("\n", "\\n"))
+            print("[debug] gold:", gold[0])
+            print(
+                "[debug] model_conf:", model_conf, "\nentropy_last:", entropy_last)
             print("[debug] tail:", ans[-200:].replace("\n", "\\n"))
+            print("[debug] raw:", raw_text.replace("\n", "\\n"))
 
         if args.verbose and (idx % 10 == 0):
             try:
@@ -265,10 +355,15 @@ def main(cfg: Cfg, args):
             "prediction": ans,
             "em": em_i,
             "f1": f1_i,
+            "entropy_last": entropy_last,
+            "entropy_mean": entropy_mean,
+            "conf_entropy": conf_entropy,      # exp(-H_last)
+            "model_confidence": model_conf,    # from model JSON (if provided)
             "references": gold,
             "gen_tokens": gen_len,
             "gen_time": round(dt, 3),
             "analysis": analysis_txt,
+            "raw_output": raw_text,            # optional: keep raw for debugging
         })
 
     overall_metrics = evaluate_batch(preds, refs)

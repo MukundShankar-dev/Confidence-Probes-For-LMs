@@ -117,7 +117,7 @@ class Gemma12B:
             max_new_tokens=self.max_new_tokens,
             do_sample=False,
             return_dict_in_generate=True,
-            output_scores=False,
+            output_scores=True,
             output_hidden_states=False,
             pad_token_id=self.tok.eos_token_id,
             eos_token_id=self.tok.eos_token_id,

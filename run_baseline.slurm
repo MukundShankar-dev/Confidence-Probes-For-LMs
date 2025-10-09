@@ -65,4 +65,4 @@ python -m scripts.run_baseline \
   --max_new_tokens 64 \
   --num_shards "$num_shards" \
   --shard_id "$shard_id" \
-  --save_jsonl "results/triviaqa/gemma/gemma_final_only_shard${shard_id}.json" \
+  --save_jsonl "results/triviaqa/gemma/gemma_final_only_shard${shard_id}.json"
