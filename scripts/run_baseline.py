@@ -18,6 +18,8 @@ from src.data.datasets import load_qa
 from src.eval.metrics import evaluate_batch, squad_em, squad_f1
 
 import math
+import sys
+import ast
 
 # Allow fast math
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -63,7 +65,6 @@ Q: Which planet is known as the Red Planet?
 Q: {EVAL_QUESTION}
 """
 
-
 FEWSHOT_FIXED_THINKING = """You are answering trivia questions. Be concise.
 
 Q: Who wrote Hamlet?
@@ -102,7 +103,8 @@ Analysis:
 Final:
 """
 
-JSON_ERR_SEEN = False
+# Single, consistent global flag used below
+_JSON_ERR_SEEN = False
 
 def softmax_entropy(logits):
     # logits: torch.FloatTensor [V]
@@ -117,84 +119,126 @@ def _softmax_entropy_vec(logits_vec: torch.Tensor) -> float:
     logp = torch.log(probs.clamp_min(1e-12))
     return float(-(probs * logp).sum().item())
 
+def _clamp01(x):
+    try:
+        v = float(x)
+    except Exception:
+        return None
+    # Heuristic: if the model returns 0–100, scale to 0–1
+    if v > 1.0 and v <= 100.0:
+        v = v / 100.0
+    return float(max(0.0, min(1.0, v)))
+
+def _norm_answer(ans):
+    if isinstance(ans, (list, tuple)):
+        # take first non-empty string-ish item
+        for a in ans:
+            if isinstance(a, str) and a.strip():
+                return a.strip()
+        return str(ans[0]) if ans else ""
+    return ans.strip() if isinstance(ans, str) else (str(ans) if ans is not None else "")
+
 def extract_answer_and_model_conf(text: str):
     """
-    Robustly parse:
+    Robustly parse model outputs like:
       {"answer": "...", "confidence": 0.92}
-    Also tolerates key variants like "conference", "conf", "confidence_score", "probability".
-    Returns (answer_text, model_confidence or None).
+      {'answer': '...', 'confidence': 0.92}            # single quotes
+      {"answer": "...", "probability": "92%"}          # alt keys / strings
+    Returns (answer_text, confidence_or_None) with confidence in [0,1].
     """
+    import sys, json, re, ast
     global _JSON_ERR_SEEN
-    t = text.strip()
+
+    t = (text or "").strip()
 
     # strip code fences
     if t.startswith("```"):
-        t = t.strip()
         t = t.lstrip("`")
         if "\n" in t:
             t = t.split("\n", 1)[1].strip()
         if t.endswith("```"):
             t = t[:-3].strip()
 
-    # try JSON first
+    # slice the outermost {...} if present
     start, end = t.find("{"), t.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        candidate = t[start:end+1]
-        try:
-            obj = json.loads(candidate)
+    candidate = t[start:end+1] if (start != -1 and end != -1 and end > start) else t
 
-            # normalize keys (case-insensitive)
-            norm = {k.strip().lower(): v for k, v in obj.items()}
+    def _from_mapping(obj):
+        # normalize keys (case-insensitive, strip)
+        norm = {str(k).strip().lower(): v for k, v in obj.items()}
+        # answer
+        ans = norm.get("answer") or norm.get("final") or norm.get("prediction") or ""
+        ans = _norm_answer(ans)
+        # confidence-like keys
+        conf_raw = None
+        for key in [
+            "confidence", "conference", "conf", "confidence_score",
+            "confidencelevel", "confidence_level", "prob", "probability",
+            "confident", "p", "信心", "置信度", "置信", "概率", "可能性", "信心分数", "信心分", "自信度"
+        ]:
+            if key in norm:
+                conf_raw = norm[key]
+                break
+        conf = None
+        if conf_raw is not None:
+            if isinstance(conf_raw, str):
+                s = conf_raw.strip()
+                if s.endswith("%"):
+                    conf = _clamp01(s[:-1])  # will divide by 100 via clamp rule
+                else:
+                    conf = _clamp01(s)
+            else:
+                conf = _clamp01(conf_raw)
+        return ans, conf
 
-            # pick answer
-            ans = (norm.get("answer") or norm.get("final") or norm.get("prediction") or "").strip()
+    # 1) Try strict JSON
+    try:
+        obj = json.loads(candidate)
+        if isinstance(obj, dict):
+            return _from_mapping(obj)
+    except Exception as e:
+        if not _JSON_ERR_SEEN:
+            print(f"[warn] JSON parse failed: {e}", file=sys.stdout, flush=True)
+            _JSON_ERR_SEEN = True
 
-            # map common variants to 'confidence'
-            conf = None
-            for key in [
-                "confidence", "conference", "conf", "confidence_score",
-                "confidencelevel", "confidence_level", "prob", "probability"
-            ]:
-                if key in norm and isinstance(norm[key], (int, float, str)):
-                    try:
-                        conf = float(norm[key])
-                        break
-                    except Exception:
-                        pass
+    # 2) Try Python-literal dict (handles single quotes, trailing commas, etc.)
+    try:
+        obj = ast.literal_eval(candidate)
+        if isinstance(obj, dict):
+            return _from_mapping(obj)
+    except Exception:
+        pass
 
-            # clamp/round if present
-            if conf is not None:
-                conf = float(max(0.0, min(1.0, conf)))
-
-            return ans, conf
-        except Exception as e:
-            if not _JSON_ERR_SEEN:
-                print(f"[warn] JSON parse failed in extract_answer_and_model_conf: {e}", file=sys.stdout, flush=True)
-                _JSON_ERR_SEEN = True
-
-    # regex fallback: capture answer and a numeric after a confidence-like key
+    # 3) Regex fallback: tolerate single/double quotes and % values
     m = re.search(
-        r'"answer"\s*:\s*"(?P<ans>[^"]*)".*?(?:"conf(?:idence|erence|idence_score)?|prob(?:ability)?)\s*:\s*(?P<conf>-?\d+(?:\.\d+)?)',
-        t,
-        flags=re.DOTALL | re.IGNORECASE,
+        r"""(?ix)
+        (["'])answer\1\s*:\s*(["'])(?P<ans>.*?)\2
+        .*?
+        (["'])(?:conf(?:idence|erence|idence_score)?|prob(?:ability)?|p)\4
+        \s*:\s*(?P<conf>-?\d+(?:\.\d+)?%?)
+        """,
+        candidate,
+        flags=re.DOTALL,
     )
     if m:
         ans = m.group("ans").strip()
-        conf = float(m.group("conf"))
-        conf = float(max(0.0, min(1.0, conf)))
+        conf_s = m.group("conf")
+        if conf_s.endswith("%"):
+            conf = _clamp01(conf_s[:-1])
+        else:
+            conf = _clamp01(conf_s)
         return ans, conf
 
-    # legacy fallback: [CONF=...]
+    # 4) Legacy fallback: `[CONF=...]`
     m = re.search(r"(.*?)(?:\s*\[CONF\s*=\s*([0-9.]+)\s*\]\s*)?$", t)
     if m:
         ans = m.group(1).strip()
-        conf = float(m.group(2)) if m.group(2) is not None else None
-        if conf is not None:
-            conf = float(max(0.0, min(1.0, conf)))
+        conf = _clamp01(m.group(2)) if m.group(2) is not None else None
         return ans, conf
 
-    # give up
+    # Give up
     return t, None
+
 
 def build_prompt(q: str, style: str, allow_thinking: bool, fewshot_file: str = None) -> str:
     """Build the evaluation prompt based on style + whether we allow thinking."""
@@ -473,7 +517,6 @@ def main(cfg: Cfg, args):
             "analysis": analysis_txt,
             "raw_output": raw_text,
         })
-
 
     overall_metrics = evaluate_batch(preds, refs)
 

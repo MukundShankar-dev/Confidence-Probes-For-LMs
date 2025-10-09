@@ -56,7 +56,7 @@ python -m scripts.run_baseline \
   --shard_id "$shard_id" \
   --save_jsonl "results/triviaqa/qwen/qwen_final_only_shard${shard_id}.json"
 
-python -m scripts.merge_results results/triviaqa/qwen
+# python -m scripts.merge_results results/triviaqa/qwen
 
 python -m scripts.run_baseline \
   --config configs/default.yaml \
@@ -69,7 +69,7 @@ python -m scripts.run_baseline \
   --shard_id "$shard_id" \
   --save_jsonl "results/triviaqa/gemma/gemma_final_only_shard${shard_id}.json"
 
-python -m scripts.merge_results results/triviaqa/gemma
+# python -m scripts.merge_results results/triviaqa/gemma
 
 python -m scripts.run_baseline \
   --config configs/default.yaml \
@@ -82,7 +82,7 @@ python -m scripts.run_baseline \
   --shard_id $shard_id \
   --save_jsonl results/triviaqa/llama31/8b_final_only_shard${shard_id}.json
 
-python -m scripts.merge_results results/triviaqa/llama31
+# python -m scripts.merge_results results/triviaqa/llama31
 
 # python -u -m scripts.run_baseline \
 #   --config configs/default.yaml \
