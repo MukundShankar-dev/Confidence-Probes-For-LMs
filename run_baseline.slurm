@@ -35,9 +35,10 @@ shard_id=$SLURM_ARRAY_TASK_ID
 python -m scripts.run_baseline \
   --config configs/default.yaml \
   --backend qwen \
+  --model_id "Qwen/Qwen2.5-7B-Instruct" \
   --thinking_mode off \
   --prompt_style fewshot_fixed \
-  --max_new_tokens 512 \
-  --num_shards $num_shards \
-  --shard_id $shard_id \
-  --save_jsonl results/triviaqa/qwen_final_only_shard${shard_id}.json
+  --max_new_tokens 256 \
+  --num_shards "$num_shards" \
+  --shard_id "$shard_id" \
+  --save_jsonl "results/triviaqa/qwen/qwen_final_only_shard${shard_id}.json"

@@ -14,6 +14,11 @@ from src.models.qwen7b import Qwen7B
 from src.data.datasets import load_qa
 from src.eval.metrics import evaluate_batch, squad_em, squad_f1
 
+# Allow fast math
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+torch.set_float32_matmul_precision("high")
+
 # ---------------- Prompts ----------------
 
 ZERO_SHOT_FINAL_ONLY = (
@@ -78,7 +83,6 @@ Final:
 def build_prompt(q: str, style: str, allow_thinking: bool, fewshot_file: str = None) -> str:
     """Build the evaluation prompt based on style + whether we allow thinking."""
     if allow_thinking:
-        # Use textual Analysis/Final protocol (robust, model-agnostic)
         if style == "fewshot_fixed":
             return FEWSHOT_FIXED_THINKING.format(EVAL_QUESTION=q)
         elif style == "fewshot_file":
@@ -86,12 +90,10 @@ def build_prompt(q: str, style: str, allow_thinking: bool, fewshot_file: str = N
                 f"--fewshot_file missing or not found: {fewshot_file}"
             with open(fewshot_file, "r", encoding="utf-8") as f:
                 template = f.read()
-            # Template must end its example with a 'Final:' block and contain {EVAL_QUESTION}
             assert "{EVAL_QUESTION}" in template, \
                 "fewshot_file must contain {EVAL_QUESTION} placeholder."
             return template.format(EVAL_QUESTION=q)
         else:
-            # zero_shot thinking: minimal scaffold
             return (
                 "You are answering trivia questions.\n\n"
                 "Q: {Q}\nAnalysis:\n- Think briefly.\nFinal:\n"
@@ -106,29 +108,20 @@ def build_prompt(q: str, style: str, allow_thinking: bool, fewshot_file: str = N
                 template = f.read()
             assert "{EVAL_QUESTION}" in template, \
                 "fewshot_file must contain {EVAL_QUESTION} placeholder."
-            # Expect the template to end answers directly with the short span (no 'Final:')
             return template.format(EVAL_QUESTION=q)
         else:
-            return ZERO_SHOT_FINAL_ONLY.pattern(q=q) if hasattr(ZERO_SHOT_FINAL_ONLY, "pattern") \
-                else ZERO_SHOT_FINAL_ONLY.format(q=q)
+            return ZERO_SHOT_FINAL_ONLY.format(q=q)
 
 # ---------------- Parsing helpers ----------------
 
 def parse_analysis_final(text: str):
-    """
-    Extract 'Analysis:' ... 'Final:' blocks from plain text.
-    Robust to extra whitespace and trailing junk.
-    """
-    # Fold weird whitespace and normalize markers
+    """Extract 'Analysis:' ... 'Final:' blocks from plain text."""
     t = re.sub(r"\r", "", text)
-    # Greedy-ish capture of analysis, then final
-    m = re.search(r"Analysis:\s*(.*?)\s*Final:\s*(.*)",
-                  t, flags=re.IGNORECASE | re.DOTALL)
+    m = re.search(r"Analysis:\s*(.*?)\s*Final:\s*(.*)", t, flags=re.IGNORECASE | re.DOTALL)
     if not m:
         return "", text.strip()
     analysis = m.group(1).strip()
     final = m.group(2).strip()
-    # Trim any trailing boilerplate often appended by models
     final = re.split(r"\n(?:Analysis:|Final:)", final)[0].strip()
     return analysis, final
 
@@ -156,14 +149,13 @@ def main(cfg: Cfg, args):
         allow_thinking_effective = False
 
     max_new_tokens = args.max_new_tokens or cfg.model.max_new_tokens
-    # final-only if we DON'T allow thinking
-    force_final = not allow_thinking_effective
+    force_final = not allow_thinking_effective  # final-only if we DON'T allow thinking
     reasoning = args.reasoning
 
-    # Thinking mode dispatch (bug fix: explicitly set force_final = True when 'off')
+    # Thinking mode dispatch
     if thinking_mode_effective == "off":
         use_chat = True
-        force_final = True  # ensure final-only fast path for GPT, ignored by Qwen wrapper
+        force_final = True
         parse_harmony = False
         parse_textual = False
     elif thinking_mode_effective == "textual":
@@ -179,8 +171,9 @@ def main(cfg: Cfg, args):
 
     # Model backend
     if backend == "gpt":
+        model_id = args.model_id or cfg.model.model_id
         model = GPTOSS(
-            cfg.model.model_id,
+            model_id,
             cfg.model.dtype,
             cfg.model.device_map,
             max_new_tokens=max_new_tokens,
@@ -188,17 +181,17 @@ def main(cfg: Cfg, args):
             cache_dir=getattr(cfg.model, "cache_dir", None),
             use_chat_template=use_chat,
             reasoning_effort=reasoning,
-            # final-only vs think-then-final (Harmony)
-            force_final_prefix=force_final,
+            force_final_prefix=force_final,          # final-only vs think-then-final (Harmony)
             final_allowance=args.final_allowance,
             analysis_cap=args.analysis_cap,
         )
-    else:  # "qwen"
-        # Qwen uses plain-text (no Harmony); 'use_chat'/'force_final' are irrelevant here.
+    elif backend == "qwen":  # "qwen"
+        # Qwen uses plain-text (no Harmony); keep full-GPU placement and SDPA attention in Qwen7B.
+        model_id = args.model_id or "Qwen/Qwen2.5-7B-Instruct"
         model = Qwen7B(
-            model_id=getattr(cfg.model, "model_id", "Qwen/Qwen-7B"),
+            model_id=model_id,
             dtype=getattr(cfg.model, "dtype", "float16"),
-            device_map=getattr(cfg.model, "device_map", "auto"),
+            device_map=None,                         # full GPU (no offload)
             max_new_tokens=max_new_tokens,
             cache_dir=getattr(cfg.model, "cache_dir", None),
         )
@@ -216,8 +209,7 @@ def main(cfg: Cfg, args):
     bar = tqdm(ds, desc="baseline", dynamic_ncols=True)
     for idx, ex in enumerate(bar):
         q, gold = ex["question"], ex["answers"]
-        prompt = build_prompt(q, prompt_style_effective,
-                              allow_thinking_effective, args.fewshot_file)
+        prompt = build_prompt(q, prompt_style_effective, allow_thinking_effective, args.fewshot_file)
 
         t0 = time.perf_counter()
         inp, gen = model.generate_with_states(prompt)
@@ -236,8 +228,7 @@ def main(cfg: Cfg, args):
             analysis_txt, ans = parse_analysis_final(raw_plain)
             ans = ans.strip()
         else:
-            analysis_txt, ans = "", model.tok.decode(
-                new_ids[0], skip_special_tokens=True).strip()
+            analysis_txt, ans = "", model.tok.decode(new_ids[0], skip_special_tokens=True).strip()
 
         gen_len = int(new_ids.shape[-1])
         total_tokens += gen_len
@@ -311,9 +302,10 @@ if __name__ == "__main__":
     ap.add_argument("--thinking_mode", choices=["off", "textual", "harmony"], default="off",
                     help="off=final-only; textual=Analysis/Final delimiters (no Harmony); harmony=think->final with Harmony")
 
-    # backend choice
+    # backend & model id
     ap.add_argument("--backend", choices=["gpt", "qwen"], default="gpt",
                     help="Select model backend: 'gpt' for GPTOSS (Harmony-capable), 'qwen' for Qwen7B (plain)")
+    ap.add_argument("--model_id", type=str, default=None, help="override model id for selected backend")
 
     ap.add_argument("--num_shards", type=int, default=1, help="for distributed eval (slurm)")
     ap.add_argument("--shard_id", type=int, default=0, help="shard index for distributed eval (slurm)")

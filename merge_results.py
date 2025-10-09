@@ -1,8 +1,8 @@
 import glob, json, os, re
 from src.eval.metrics import evaluate_batch
 
-files = sorted(glob.glob("results/triviaqa/harmony_medium_shard*.json"))
-out_path = "results/triviaqa/harmony_medium_all.jsonl"
+files = sorted(glob.glob("results/triviaqa/qwen/qwen_final_only_shard*.json"))
+out_path = "results/triviaqa/qwen/qwen_final_only_all.jsonl"
 os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
 global_idx = 0
@@ -24,7 +24,7 @@ with open(out_path, "w", encoding="utf-8") as w:
 
 print(f"[merge] wrote {out_path} with {global_idx} rows")
 
-in_path = "results/triviaqa/harmony_medium_all.jsonl"
+in_path = "results/triviaqa/qwen/qwen_final_only_all.jsonl"
 preds, refs = [], []
 with open(in_path, "r", encoding="utf-8") as f:
     for line in f:
