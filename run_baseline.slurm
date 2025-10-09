@@ -20,15 +20,24 @@ reasoning=medium
 num_shards=$SLURM_ARRAY_TASK_COUNT
 shard_id=$SLURM_ARRAY_TASK_ID
 
-# Medium
+# python -m scripts.run_baseline \
+#   --config configs/default.yaml \
+#   --thinking_mode harmony \
+#   --prompt_style fewshot_fixed \
+#   --reasoning $reasoning \
+#   --max_new_tokens 512 \
+#   --analysis_cap 512 \
+#   --final_allowance 32 \
+#   --num_shards $num_shards \
+#   --shard_id $shard_id \
+#   --save_jsonl results/triviaqa/harmony_${reasoning}_shard${shard_id}.json
+
 python -m scripts.run_baseline \
   --config configs/default.yaml \
-  --thinking_mode harmony \
+  --backend qwen \
+  --thinking_mode off \
   --prompt_style fewshot_fixed \
-  --reasoning $reasoning \
   --max_new_tokens 512 \
-  --analysis_cap 512 \
-  --final_allowance 32 \
   --num_shards $num_shards \
   --shard_id $shard_id \
-  --save_jsonl results/triviaqa/harmony_${reasoning}_shard${shard_id}.json
+  --save_jsonl results/triviaqa/qwen_final_only_shard${shard_id}.json
