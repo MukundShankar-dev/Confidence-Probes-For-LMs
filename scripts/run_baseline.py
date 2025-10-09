@@ -11,6 +11,7 @@ from transformers.utils import logging as hf_logging
 from src.conf.config import Cfg
 from src.models.gpt_oss import GPTOSS
 from src.models.qwen7b import Qwen7B
+from src.models.gemma12b import Gemma12B
 from src.data.datasets import load_qa
 from src.eval.metrics import evaluate_batch, squad_em, squad_f1
 
@@ -41,7 +42,6 @@ A: Mars
 Q: {EVAL_QUESTION}
 A: """
 
-# Few-shot template for THINKING mode (textual delimiters)
 FEWSHOT_FIXED_THINKING = """You are answering trivia questions. Be concise.
 
 Q: Who wrote Hamlet?
@@ -112,8 +112,6 @@ def build_prompt(q: str, style: str, allow_thinking: bool, fewshot_file: str = N
         else:
             return ZERO_SHOT_FINAL_ONLY.format(q=q)
 
-# ---------------- Parsing helpers ----------------
-
 def parse_analysis_final(text: str):
     """Extract 'Analysis:' ... 'Final:' blocks from plain text."""
     t = re.sub(r"\r", "", text)
@@ -142,8 +140,8 @@ def main(cfg: Cfg, args):
     thinking_mode_effective = args.thinking_mode
     allow_thinking_effective = args.allow_thinking
 
-    if backend == "qwen":
-        # Force FINAL-ONLY + FEWSHOT_FIXED_FINAL_ONLY for Qwen
+    if backend in ("qwen", "gemma"):
+        # Force FINAL-ONLY + FEWSHOT_FIXED_FINAL_ONLY for plain LMs
         prompt_style_effective = "fewshot_fixed"
         thinking_mode_effective = "off"
         allow_thinking_effective = False
@@ -185,8 +183,7 @@ def main(cfg: Cfg, args):
             final_allowance=args.final_allowance,
             analysis_cap=args.analysis_cap,
         )
-    elif backend == "qwen":  # "qwen"
-        # Qwen uses plain-text (no Harmony); keep full-GPU placement and SDPA attention in Qwen7B.
+    elif backend == "qwen":
         model_id = args.model_id or "Qwen/Qwen2.5-7B-Instruct"
         model = Qwen7B(
             model_id=model_id,
@@ -195,6 +192,17 @@ def main(cfg: Cfg, args):
             max_new_tokens=max_new_tokens,
             cache_dir=getattr(cfg.model, "cache_dir", None),
         )
+    elif backend == "gemma":
+        model_id = args.model_id or "google/gemma-12b-it"
+        model = Gemma12B(
+            model_id=model_id,
+            dtype=getattr(cfg.model, "dtype", "float16"),
+            device_map=None,                         # full GPU (no offload)
+            max_new_tokens=max_new_tokens,
+            cache_dir=getattr(cfg.model, "cache_dir", None),
+        )
+    else:
+        raise ValueError(f"Unknown backend: {backend}")
 
     limit = args.limit or cfg.data.limit
     ds = load_qa(cfg.data.dataset, cfg.data.split, limit)
@@ -303,8 +311,8 @@ if __name__ == "__main__":
                     help="off=final-only; textual=Analysis/Final delimiters (no Harmony); harmony=think->final with Harmony")
 
     # backend & model id
-    ap.add_argument("--backend", choices=["gpt", "qwen"], default="gpt",
-                    help="Select model backend: 'gpt' for GPTOSS (Harmony-capable), 'qwen' for Qwen7B (plain)")
+    ap.add_argument("--backend", choices=["gpt", "qwen", "gemma"], default="gpt",
+                    help="Select model backend.")
     ap.add_argument("--model_id", type=str, default=None, help="override model id for selected backend")
 
     ap.add_argument("--num_shards", type=int, default=1, help="for distributed eval (slurm)")
