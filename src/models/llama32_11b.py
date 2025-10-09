@@ -1,6 +1,6 @@
-# src/models/gemma12b.py
+# src/models/llama32_11b.py
 import torch
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 from transformers import AutoModelForCausalLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList
 
 def _enc(tok, s: str):
@@ -27,28 +27,43 @@ class _StopOnNewlineOrEos(StoppingCriteria):
             return True
         return False
 
-class Gemma12B:
+class _StopOnStrings(StoppingCriteria):
+    def __init__(self, tok, stop_strings: List[str]):
+        self.stop_ids: List[List[int]] = []
+        for s in stop_strings:
+            ids = _enc(tok, s)
+            if ids:
+                self.stop_ids.append(ids)
+        self.start_len = None
+    def set_start_len(self, start_len: int): self.start_len = int(start_len)
+    def __call__(self, input_ids, scores, **kwargs):
+        if self.start_len is None:
+            return False
+        seq = input_ids[0].tolist()
+        for pat in self.stop_ids:
+            L = len(pat)
+            if L and len(seq) >= L and seq[-L:] == pat:
+                return True
+        return False
+
+class Llama32_11B:
     """
-    GPTOSS-compatible adapter for Gemma Instruct (no Harmony).
-    Uses chat template to avoid degenerate outputs.
-    Exposes:
-      - .tok
-      - generate_with_states(prompt) -> (inputs_dict, gen_output)
-      - split_channels(generated_ids) -> ("", final_text)
+    GPTOSS-compatible adapter for Llama-3.2-11B-Vision-Instruct used as TEXT-ONLY.
+    (We do not pass images; treat it like a standard chat LM.)
     """
     def __init__(
         self,
-        model_id: str = "google/gemma-2-12b-it",   # use the 12B IT checkpoint you have access to
+        model_id: str = "meta-llama/Llama-3.2-11B-Vision-Instruct",
         dtype: str = "float16",
-        device_map: str = None,                    # full GPU (no offload)
+        device_map: str = None,
         max_new_tokens: int = 128,
         cache_dir: str = None,
+        use_chat_template: bool = True,
         system_prompt=(
             "You are answering trivia questions. "
             "Return only a single JSON object with keys exactly \"answer\" and \"confidence\". "
             "Do not include any other keys or text. The key must be spelled \"confidence\" (not \"conference\")."
         ),
-        use_chat_template: bool = True,
     ):
         torch_dtype = getattr(torch, dtype) if hasattr(torch, dtype) else torch.float16
         self.tok = AutoTokenizer.from_pretrained(
@@ -57,7 +72,7 @@ class Gemma12B:
         self.model = AutoModelForCausalLM.from_pretrained(
             model_id,
             torch_dtype=torch_dtype,
-            device_map=device_map,              # None -> push to CUDA below
+            device_map=device_map,
             cache_dir=cache_dir,
             trust_remote_code=True,
             low_cpu_mem_usage=True,
@@ -68,65 +83,58 @@ class Gemma12B:
             self.model.config.pad_token_id = self.tok.eos_token_id
 
         self.max_new_tokens = int(max_new_tokens)
-        self._stopper = _StopOnNewlineOrEos(self.tok, min_new_tokens_after_start=2)
-        self.system_prompt = system_prompt
         self.use_chat_template = use_chat_template
+        self.system_prompt = system_prompt
 
-        # banner
+        self._stopper_nl = _StopOnNewlineOrEos(self.tok, min_new_tokens_after_start=2)
+        self._stopper_strs = _StopOnStrings(
+            self.tok, stop_strings=["\nQ:", " Q:", "\nUser:", "\nAssistant:"]
+        )
+
         dm = getattr(self.model, "hf_device_map", None)
         first_dev = next(self.model.parameters()).device
-        print(f"[Gemma12B] device map: {dm}")
-        print(f"[Gemma12B] first param device: {first_dev} | dtype={torch_dtype} | attn=sdpa")
+        print(f"[Llama32_11B] device map: {dm}")
+        print(f"[Llama32_11B] first param device: {first_dev}")
 
-    # ---------- inputs ----------
     def _build_inputs(self, user_text: str) -> Dict[str, torch.Tensor]:
-        """
-        Build inputs using Gemma's chat template so BOS + special tokens are correct.
-        We place the full few-shot block + 'Q: ...\\nA: ' as a single user message.
-        """
         if self.use_chat_template and hasattr(self.tok, "apply_chat_template"):
             messages = []
             if self.system_prompt:
                 messages.append({"role": "system", "content": self.system_prompt})
             messages.append({"role": "user", "content": user_text})
             enc = self.tok.apply_chat_template(
-                messages,
-                add_generation_prompt=True,
-                return_tensors="pt"
+                messages, add_generation_prompt=True, return_tensors="pt"
             )
             inputs = {"input_ids": enc.to(self.model.device)}
-            # attention mask is inferred if missing; add for safety:
             inputs["attention_mask"] = torch.ones_like(inputs["input_ids"])
             return inputs
         else:
-            # fallback: plain encode WITH special tokens
             enc = self.tok(user_text, return_tensors="pt", add_special_tokens=True)
             enc = {k: v.to(self.model.device) for k, v in enc.items()}
             if "attention_mask" not in enc:
                 enc["attention_mask"] = torch.ones_like(enc["input_ids"])
             return enc
 
-    # ---------- public APIs (GPTOSS-compatible) ----------
     @torch.no_grad()
     def generate_with_states(self, prompt: str):
-        """
-        Final-only textual generation. Returns (inputs, gen) like GPTOSS.
-        The `prompt` string is your few-shot-final-only block (from run_baseline).
-        """
         inputs = self._build_inputs(prompt)
-        self._stopper.set_start_len(int(inputs["input_ids"].shape[-1]))
+        start_len = int(inputs["input_ids"].shape[-1])
+        self._stopper_nl.set_start_len(start_len)
+        self._stopper_strs.set_start_len(start_len)
 
         gen = self.model.generate(
             **inputs,
             max_new_tokens=self.max_new_tokens,
             do_sample=False,
+            no_repeat_ngram_size=3,
+            repetition_penalty=1.05,
             return_dict_in_generate=True,
             output_scores=True,
             output_hidden_states=False,
             pad_token_id=self.tok.eos_token_id,
             eos_token_id=self.tok.eos_token_id,
             use_cache=True,
-            stopping_criteria=StoppingCriteriaList([self._stopper]),
+            stopping_criteria=StoppingCriteriaList([self._stopper_nl, self._stopper_strs]),
             min_new_tokens=2,
         )
         return inputs, gen

@@ -12,6 +12,8 @@ from src.conf.config import Cfg
 from src.models.gpt_oss import GPTOSS
 from src.models.qwen7b import Qwen7B
 from src.models.gemma12b import Gemma12B
+from src.models.llama31_8b import Llama31_8B
+from src.models.llama32_11b import Llama32_11B
 from src.data.datasets import load_qa
 from src.eval.metrics import evaluate_batch, squad_em, squad_f1
 
@@ -30,14 +32,15 @@ ZERO_SHOT_FINAL_ONLY = (
 )
 
 FEWSHOT_FIXED_FINAL_ONLY = """You are answering trivia questions.
-Return a single JSON object with fields:
+Return only a single JSON object with fields:
 - "answer": the short factual span (1–5 words, no punctuation)
-- "confidence": your probability (0.0–1.0) that the answer is correct
+- "confidence": your probability (0.0–1.0) that the answer is correct (round to two decimals)
 
 Calibration guidance:
 - Report your true probability; do NOT inflate.
 - Overconfidence is penalized by proper scoring (Brier). If unsure, choose a lower value.
-- If you do not know, use an educated guess with appropriately low confidence.
+- If multiple plausible answers exist or the question is ambiguous, reduce confidence appropriately.
+- If you do not know, answer "Unknown" with low confidence.
 
 Q: Who wrote Hamlet?
 {{"answer": "William Shakespeare", "confidence": 0.95}}
@@ -45,11 +48,14 @@ Q: Who wrote Hamlet?
 Q: What is the capital of France?
 {{"answer": "Paris", "confidence": 0.92}}
 
-Q: In which year did the Titanic sink?
-{{"answer": "1912", "confidence": 0.80}}
+Q: What is the capital of South Africa?
+{{"answer": "Pretoria", "confidence": 0.60}}
 
 Q: Which element has the symbol 'Xx'?
 {{"answer": "Unknown", "confidence": 0.15}}
+
+Q: Who authored the Voynich Manuscript?
+{{"answer": "Unknown", "confidence": 0.20}}
 
 Q: Which planet is known as the Red Planet?
 {{"answer": "Mars", "confidence": 0.85}}
@@ -96,6 +102,8 @@ Analysis:
 Final:
 """
 
+JSON_ERR_SEEN = False
+
 def softmax_entropy(logits):
     # logits: torch.FloatTensor [V]
     probs = torch.nn.functional.softmax(logits, dim=-1)
@@ -104,45 +112,88 @@ def softmax_entropy(logits):
     ent = -(probs * logp).sum().item()
     return float(ent)
 
+def _softmax_entropy_vec(logits_vec: torch.Tensor) -> float:
+    probs = torch.nn.functional.softmax(logits_vec, dim=-1)
+    logp = torch.log(probs.clamp_min(1e-12))
+    return float(-(probs * logp).sum().item())
+
 def extract_answer_and_model_conf(text: str):
     """
-    Try to parse a JSON object like:
-      {"answer": "Paris", "confidence": 0.92}
-    If that fails, fall back to plain text and look for trailing [CONF=0.92].
+    Robustly parse:
+      {"answer": "...", "confidence": 0.92}
+    Also tolerates key variants like "conference", "conf", "confidence_score", "probability".
     Returns (answer_text, model_confidence or None).
     """
+    global _JSON_ERR_SEEN
     t = text.strip()
 
-    # 1) try fenced or raw JSON
-    # remove code fences if present
+    # strip code fences
     if t.startswith("```"):
-        t = t.strip("`")
-        # keep content after first newline
-        t = t.split("\n", 1)[-1].strip()
-    # grab the first {...} block
-    try:
-        start = t.index("{")
-        end   = t.rindex("}") + 1
-        obj = json.loads(t[start:end])
-        ans = (obj.get("answer") or "").strip()
-        mc  = obj.get("confidence", None)
-        try:
-            mc = float(mc) if mc is not None else None
-        except Exception:
-            mc = None
-        return ans, mc
-    except Exception:
-        pass
+        t = t.strip()
+        t = t.lstrip("`")
+        if "\n" in t:
+            t = t.split("\n", 1)[1].strip()
+        if t.endswith("```"):
+            t = t[:-3].strip()
 
-    # 2) fallback: strip a trailing [CONF=...]
-    import re
+    # try JSON first
+    start, end = t.find("{"), t.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidate = t[start:end+1]
+        try:
+            obj = json.loads(candidate)
+
+            # normalize keys (case-insensitive)
+            norm = {k.strip().lower(): v for k, v in obj.items()}
+
+            # pick answer
+            ans = (norm.get("answer") or norm.get("final") or norm.get("prediction") or "").strip()
+
+            # map common variants to 'confidence'
+            conf = None
+            for key in [
+                "confidence", "conference", "conf", "confidence_score",
+                "confidencelevel", "confidence_level", "prob", "probability"
+            ]:
+                if key in norm and isinstance(norm[key], (int, float, str)):
+                    try:
+                        conf = float(norm[key])
+                        break
+                    except Exception:
+                        pass
+
+            # clamp/round if present
+            if conf is not None:
+                conf = float(max(0.0, min(1.0, conf)))
+
+            return ans, conf
+        except Exception as e:
+            if not _JSON_ERR_SEEN:
+                print(f"[warn] JSON parse failed in extract_answer_and_model_conf: {e}", file=sys.stdout, flush=True)
+                _JSON_ERR_SEEN = True
+
+    # regex fallback: capture answer and a numeric after a confidence-like key
+    m = re.search(
+        r'"answer"\s*:\s*"(?P<ans>[^"]*)".*?(?:"conf(?:idence|erence|idence_score)?|prob(?:ability)?)\s*:\s*(?P<conf>-?\d+(?:\.\d+)?)',
+        t,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if m:
+        ans = m.group("ans").strip()
+        conf = float(m.group("conf"))
+        conf = float(max(0.0, min(1.0, conf)))
+        return ans, conf
+
+    # legacy fallback: [CONF=...]
     m = re.search(r"(.*?)(?:\s*\[CONF\s*=\s*([0-9.]+)\s*\]\s*)?$", t)
     if m:
         ans = m.group(1).strip()
-        mc = float(m.group(2)) if m.group(2) is not None else None
-        return ans, mc
+        conf = float(m.group(2)) if m.group(2) is not None else None
+        if conf is not None:
+            conf = float(max(0.0, min(1.0, conf)))
+        return ans, conf
 
-    # 3) final fallback: whole string is the answer
+    # give up
     return t, None
 
 def build_prompt(q: str, style: str, allow_thinking: bool, fewshot_file: str = None) -> str:
@@ -266,6 +317,24 @@ def main(cfg: Cfg, args):
             max_new_tokens=max_new_tokens,
             cache_dir=getattr(cfg.model, "cache_dir", None),
         )
+    elif backend == "llama31":
+        model_id = args.model_id or "meta-llama/Meta-Llama-3.1-8B-Instruct"
+        model = Llama31_8B(
+            model_id=model_id,
+            dtype=getattr(cfg.model, "dtype", "float16"),
+            device_map=None,
+            max_new_tokens=max_new_tokens,
+            cache_dir=getattr(cfg.model, "cache_dir", None),
+        )
+    elif backend == "llama32":
+        model_id = args.model_id or "meta-llama/Llama-3.2-11B-Vision-Instruct"
+        model = Llama32_11B(
+            model_id=model_id,
+            dtype=getattr(cfg.model, "dtype", "float16"),
+            device_map=None,
+            max_new_tokens=max_new_tokens,
+            cache_dir=getattr(cfg.model, "cache_dir", None),
+        )
     else:
         raise ValueError(f"Unknown backend: {backend}")
 
@@ -293,34 +362,63 @@ def main(cfg: Cfg, args):
         start = inp["input_ids"].shape[-1]
         new_ids = gen.sequences[:, start:]
 
+        # Ensure these exist regardless of branch
+        raw_text = ""
+        model_conf = None
+
         if parse_harmony:
             analysis_txt, ans = model.split_channels(new_ids[0])
             ans = ans.strip()
+            raw_text = ans  # no separate raw here
         elif parse_textual:
             raw_plain = model.tok.decode(new_ids[0], skip_special_tokens=True)
             analysis_txt, ans = parse_analysis_final(raw_plain)
             ans = ans.strip()
+            raw_text = raw_plain
         else:
             raw_text = model.tok.decode(new_ids[0], skip_special_tokens=True).strip()
             analysis_txt, ans = "", raw_text
             ans_parsed, model_conf = extract_answer_and_model_conf(raw_text)
             if ans_parsed:
-                ans = ans_parsed
-            ans = ans.strip()
+                ans = ans_parsed.strip()
 
+        # -------- confidences / entropies ----------
         entropy_last = None
-        entropy_mean = None
-        conf_entropy = None
+        entropy_mean = None              # mean over *content* steps (excludes last)
+        conf_entropy = None              # exp(-entropy_last) (kept for backward-compat)
+        conf_entropy_mean = None         # exp(-mean content entropy)
+        seq_conf = None                  # geometric mean token prob over content tokens
 
         try:
-            scores = gen.scores  # list of length = #generated tokens; each is [batch, vocab]
-            if scores and len(scores) > 0:
-                ents = [softmax_entropy(s[0].float()) for s in scores]  # batch size = 1
+            scores = gen.scores  # list length = #gen tokens; each is [1, vocab]
+            T = len(scores)
+
+            if T > 0:
+                ents = [_softmax_entropy_vec(s[0].float()) for s in scores]
                 entropy_last = float(ents[-1])
-                entropy_mean = float(sum(ents) / len(ents))
-                # simple mapping from entropy to [0,1] "confidence" (lower entropy -> higher confidence)
-                # matches your earlier approach exp(-H)
                 conf_entropy = float(math.exp(-entropy_last))
+
+                # treat the very last step as newline/EOS; exclude for content stats
+                content_ents = ents[:-1] if T > 1 else ents
+                if content_ents:
+                    entropy_mean = float(sum(content_ents) / len(content_ents))
+                    conf_entropy_mean = float(math.exp(-entropy_mean))
+
+                # sequence confidence: mean token prob for generated ids, excluding last
+                gen_ids_seq = new_ids[0].tolist()
+                if T > 1:
+                    gen_ids_seq = gen_ids_seq[:-1]
+                    scores_iter = scores[:-1]
+                else:
+                    scores_iter = scores
+
+                if len(gen_ids_seq) == len(scores_iter) and len(gen_ids_seq) > 0:
+                    logps = []
+                    for logit_step, tok_id in zip(scores_iter, gen_ids_seq):
+                        lsm = torch.nn.functional.log_softmax(logit_step[0].float(), dim=-1)
+                        logps.append(float(lsm[tok_id].item()))
+                    avg_logp = sum(logps) / len(logps)
+                    seq_conf = float(math.exp(avg_logp))  # in [0,1]
         except Exception:
             pass
 
@@ -336,9 +434,14 @@ def main(cfg: Cfg, args):
 
         if idx == 0 or args.debug_first:
             print("[debug] head:", ans[:200].replace("\n", "\\n"))
-            print("[debug] gold:", gold[0])
-            print(
-                "[debug] model_conf:", model_conf, "\nentropy_last:", entropy_last)
+            if isinstance(gold, (list, tuple)) and gold:
+                print("[debug] gold:", gold[0])
+            else:
+                print("[debug] gold:", gold)
+            print("[debug] model_conf:", model_conf)
+            print("entropy_last:", entropy_last, "| entropy_mean_content:", entropy_mean,
+                  "| conf_entropy_last:", conf_entropy, "| conf_entropy_mean:", conf_entropy_mean,
+                  "| seq_conf:", seq_conf)
             print("[debug] tail:", ans[-200:].replace("\n", "\\n"))
             print("[debug] raw:", raw_text.replace("\n", "\\n"))
 
@@ -355,16 +458,22 @@ def main(cfg: Cfg, args):
             "prediction": ans,
             "em": em_i,
             "f1": f1_i,
+
+            # === confidence / entropy metrics ===
             "entropy_last": entropy_last,
-            "entropy_mean": entropy_mean,
-            "conf_entropy": conf_entropy,      # exp(-H_last)
-            "model_confidence": model_conf,    # from model JSON (if provided)
+            "entropy_mean": entropy_mean,                # mean over content tokens
+            "conf_entropy": conf_entropy,                # exp(-H_last)  (legacy)
+            "conf_entropy_mean": conf_entropy_mean,      # exp(-mean H_content)
+            "seq_conf": seq_conf,                        # geometric mean token prob
+
+            "model_confidence": model_conf,              # from model JSON (if provided)
             "references": gold,
             "gen_tokens": gen_len,
             "gen_time": round(dt, 3),
             "analysis": analysis_txt,
-            "raw_output": raw_text,            # optional: keep raw for debugging
+            "raw_output": raw_text,
         })
+
 
     overall_metrics = evaluate_batch(preds, refs)
 
@@ -406,7 +515,7 @@ if __name__ == "__main__":
                     help="off=final-only; textual=Analysis/Final delimiters (no Harmony); harmony=think->final with Harmony")
 
     # backend & model id
-    ap.add_argument("--backend", choices=["gpt", "qwen", "gemma"], default="gpt",
+    ap.add_argument("--backend", choices=["gpt", "qwen", "gemma", "llama31", "llama32"], default="gpt",
                     help="Select model backend.")
     ap.add_argument("--model_id", type=str, default=None, help="override model id for selected backend")
 

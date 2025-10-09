@@ -1,8 +1,7 @@
 # src/models/qwen7b.py
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList
-from typing import Dict, Tuple
-
+from typing import Dict, Tuple, List
 
 def _enc(tok, s: str):
     """Encode a literal string to token IDs without specials (safe)."""
@@ -12,12 +11,11 @@ def _enc(tok, s: str):
     except Exception:
         return []
 
-
 class _StopOnNewlineOrEos(StoppingCriteria):
     """
     Conservative stopper for plain-text final-only inference:
       - Require a couple tokens beyond the prompt (avoid empty outputs)
-      - Stop on EOS, or when a trailing newline appears (common short-answer format)
+      - Stop on EOS, or when a trailing newline appears
     """
     def __init__(self, tok, min_new_tokens_after_start: int = 2):
         self.start_len = None
@@ -36,36 +34,66 @@ class _StopOnNewlineOrEos(StoppingCriteria):
             return False
         if self.nl_ids and len(seq) >= len(self.nl_ids) and seq[-len(self.nl_ids):] == self.nl_ids:
             return True
-        # HF will also stop on eos_token_id if configured.
         return False
 
+class _StopOnStrings(StoppingCriteria):
+    """
+    Stop if the output ends with any of a set of string patterns (encoded to IDs).
+    Useful to prevent Qwen from starting another 'Q:' block.
+    """
+    def __init__(self, tok, stop_strings: List[str]):
+        self.stop_ids: List[List[int]] = []
+        for s in stop_strings:
+            ids = _enc(tok, s)
+            if ids:
+                self.stop_ids.append(ids)
+        self.start_len = None
+
+    def set_start_len(self, start_len: int):
+        self.start_len = int(start_len)
+
+    def __call__(self, input_ids, scores, **kwargs):
+        if self.start_len is None:
+            return False
+        seq = input_ids[0].tolist()
+        for pat in self.stop_ids:
+            L = len(pat)
+            if L and len(seq) >= L and seq[-L:] == pat:
+                return True
+        return False
 
 class Qwen7B:
     """
     GPTOSS-compatible adapter for Qwen (no Harmony channels).
+    Uses chat template to reduce pattern continuation and adds stop strings.
     Exposes:
-      - .tok  (tokenizer)
+      - .tok
       - generate_with_states(prompt) -> (inputs_dict, gen_output)
       - split_channels(generated_ids) -> ("", final_text)
     """
+
     def __init__(
         self,
         model_id: str = "Qwen/Qwen2.5-7B-Instruct",
         dtype: str = "float16",
-        device_map: str = None,            # force full GPU (no offload)
+        device_map: str = None,      # None -> to("cuda") below
         max_new_tokens: int = 128,
         cache_dir: str = None,
+        use_chat_template: bool = True,
+        system_prompt: str = (
+            "You are answering trivia questions. "
+            "Return only a single JSON object with fields 'answer' and 'confidence'. "
+            "Do not include anything else."
+        ),
     ):
         torch_dtype = getattr(torch, dtype) if hasattr(torch, dtype) else torch.float16
         self.tok = AutoTokenizer.from_pretrained(
             model_id, use_fast=True, cache_dir=cache_dir, trust_remote_code=True
         )
-
-        # Use SDPA (built-in PyTorch attention); avoid flash-attn (GLIBC issue).
         self.model = AutoModelForCausalLM.from_pretrained(
             model_id,
             torch_dtype=torch_dtype,
-            device_map=device_map,              # None -> we'll push to CUDA below
+            device_map=device_map,
             cache_dir=cache_dir,
             trust_remote_code=True,
             low_cpu_mem_usage=True,
@@ -76,45 +104,75 @@ class Qwen7B:
             self.model.config.pad_token_id = self.tok.eos_token_id
 
         self.max_new_tokens = int(max_new_tokens)
-        self._stopper = _StopOnNewlineOrEos(self.tok, min_new_tokens_after_start=2)
+        self.use_chat_template = use_chat_template
+        self.system_prompt = system_prompt
 
-        # Banners (mirroring GPTOSS style)
+        # Stoppers
+        self._stopper_nl = _StopOnNewlineOrEos(self.tok, min_new_tokens_after_start=2)
+        # Stop if model starts another question or a new turn marker
+        self._stopper_strs = _StopOnStrings(
+            self.tok,
+            stop_strings=["\nQ:", " Q:", "\nUser:", "\nAssistant:"]
+        )
+
+        # Banners
         dm = getattr(self.model, "hf_device_map", None)
         first_dev = next(self.model.parameters()).device
         print(f"[Qwen7B] device map: {dm}")
-        print(f"[Qwen7B] first param device: {first_dev} | dtype={torch_dtype} | attn=sdpa")
+        print(f"[Qwen7B] first param device: {first_dev}")
 
     # ---------- inputs ----------
-    def _build_inputs_plain(self, text: str) -> Dict[str, torch.Tensor]:
-        enc = self.tok(text, return_tensors="pt", add_special_tokens=False)
-        enc = {k: v.to(self.model.device) for k, v in enc.items()}
-        if "attention_mask" not in enc:
-            enc["attention_mask"] = torch.ones_like(enc["input_ids"])
-        return enc
+    def _build_inputs(self, user_text: str) -> Dict[str, torch.Tensor]:
+        """
+        Build inputs using chat template so Qwen treats this as a single assistant turn.
+        We put the entire few-shot block (with the final 'Q: ...') as the user message.
+        """
+        if self.use_chat_template and hasattr(self.tok, "apply_chat_template"):
+            messages = []
+            if self.system_prompt:
+                messages.append({"role": "system", "content": self.system_prompt})
+            messages.append({"role": "user", "content": user_text})
+            enc = self.tok.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                return_tensors="pt"
+            )
+            inputs = {"input_ids": enc.to(self.model.device)}
+            inputs["attention_mask"] = torch.ones_like(inputs["input_ids"])
+            return inputs
+        else:
+            # Fallback: plain encode WITH special tokens to avoid degenerate output
+            enc = self.tok(user_text, return_tensors="pt", add_special_tokens=True)
+            enc = {k: v.to(self.model.device) for k, v in enc.items()}
+            if "attention_mask" not in enc:
+                enc["attention_mask"] = torch.ones_like(enc["input_ids"])
+            return enc
 
     # ---------- public APIs (GPTOSS-compatible) ----------
     @torch.no_grad()
     def generate_with_states(self, prompt: str):
         """
-        Final-only textual generation (no Harmony). Returns (inputs, gen) like GPTOSS.
+        Final-only textual generation. Returns (inputs, gen) like GPTOSS.
+        The `prompt` string is your few-shot-final-only block from run_baseline.
         """
-        inputs = self._build_inputs_plain(prompt)
+        inputs = self._build_inputs(prompt)
         start_len = int(inputs["input_ids"].shape[-1])
-        self._stopper.set_start_len(start_len)
+        self._stopper_nl.set_start_len(start_len)
+        self._stopper_strs.set_start_len(start_len)
 
         gen = self.model.generate(
             **inputs,
             max_new_tokens=self.max_new_tokens,
             do_sample=False,                 # deterministic for baseline parity
-            # keep generation cheap:
-            # (drop no_repeat_ngram_size/repetition_penalty unless truly needed)
+            no_repeat_ngram_size=3,
+            repetition_penalty=1.05,
             return_dict_in_generate=True,
-            output_scores=True,
+            output_scores=True,              # enable per-step logits
             output_hidden_states=False,
             pad_token_id=self.tok.eos_token_id,
             eos_token_id=self.tok.eos_token_id,
             use_cache=True,
-            stopping_criteria=StoppingCriteriaList([self._stopper]),
+            stopping_criteria=StoppingCriteriaList([self._stopper_nl, self._stopper_strs]),
             min_new_tokens=2,
         )
         return inputs, gen
