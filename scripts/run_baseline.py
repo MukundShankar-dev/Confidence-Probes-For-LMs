@@ -193,11 +193,11 @@ def main(cfg: Cfg, args):
             cache_dir=getattr(cfg.model, "cache_dir", None),
         )
     elif backend == "gemma":
-        model_id = args.model_id or "google/gemma-12b-it"
+        model_id = args.model_id or "google/gemma-3-12b-it"
         model = Gemma12B(
             model_id=model_id,
             dtype=getattr(cfg.model, "dtype", "float16"),
-            device_map=None,                         # full GPU (no offload)
+            device_map=None,
             max_new_tokens=max_new_tokens,
             cache_dir=getattr(cfg.model, "cache_dir", None),
         )

@@ -8,7 +8,7 @@
 #SBATCH --time=24:00:00
 #SBATCH -o logs/%x_%A_%a.out
 #SBATCH -e logs/%x_%A_%a.err
-#SBATCH --array=0-24
+#SBATCH --array=0-50
 
 set -euo pipefail
 
@@ -27,7 +27,7 @@ source ~/.bashrc
 # conda env remove --name vidseg
 
 conda activate llm
-
+export PYTHONUNBUFFERED=1
 reasoning=medium
 
 num_shards=$SLURM_ARRAY_TASK_COUNT
@@ -62,7 +62,7 @@ python -m scripts.run_baseline \
   --model_id "google/gemma-3-12b-it" \
   --thinking_mode off \
   --prompt_style fewshot_fixed \
-  --max_new_tokens 128 \
+  --max_new_tokens 64 \
   --num_shards "$num_shards" \
   --shard_id "$shard_id" \
-  --save_jsonl "results/triviaqa/gemma/gemma_final_only_shard${shard_id}.json"
+  --save_jsonl "results/triviaqa/gemma/gemma_final_only_shard${shard_id}.json" \
