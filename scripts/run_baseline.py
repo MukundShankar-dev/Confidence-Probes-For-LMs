@@ -20,6 +20,7 @@ from src.eval.metrics import evaluate_batch, squad_em, squad_f1
 import math
 import sys
 import ast
+from typing import Optional, Tuple
 
 # Allow fast math
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -33,7 +34,8 @@ ZERO_SHOT_FINAL_ONLY = (
     "Q: {q}\nA: "
 )
 
-FEWSHOT_FIXED_FINAL_ONLY = """You are answering trivia and reading comprehension questions.
+# For datasets that ALLOW 'Unknown' (SQuAD v2)
+FEWSHOT_FIXED_SQUADV2 = """You are answering trivia and reading comprehension questions.
 Return only a single JSON object with fields:
 - "answer": the short factual span (1–5 words, no punctuation).
   If the question cannot be answered from the given context, use "Unknown".
@@ -59,6 +61,35 @@ Q: Which element has the symbol 'Au'?
 
 Q: Who authored the Voynich Manuscript?
 {{"answer": "Unknown", "p_true": 0.20}}
+
+Q: Which planet is known as the Red Planet?
+{{"answer": "Mars", "p_true": 0.85}}
+
+Q: {EVAL_QUESTION}
+"""
+
+# For answerable datasets (TriviaQA / HotpotQA / NQ-Open): discourage 'Unknown'
+FEWSHOT_FIXED_ANSWERABLE = """You are answering trivia questions.
+Return only a single JSON object with fields:
+- "answer": the short factual span (1–5 words, no punctuation). Do NOT output "Unknown" for this dataset; instead provide your best answer span.
+- "p_true": the probability (0.0–1.0) that this answer is correct (round to two decimals).
+
+Calibration guidance:
+- Report your true probability; do NOT inflate.
+- If you are unsure, still provide your best span answer and set a lower p_true (e.g., 0.15–0.35).
+- If multiple plausible answers exist or the question is ambiguous, reduce p_true appropriately.
+
+Q: Who wrote Hamlet?
+{{"answer": "William Shakespeare", "p_true": 0.95}}
+
+Q: What is the capital of France?
+{{"answer": "Paris", "p_true": 0.92}}
+
+Q: What is the capital of South Africa?
+{{"answer": "Pretoria", "p_true": 0.60}}
+
+Q: Which element has the symbol 'Au'?
+{{"answer": "Aluminum", "p_true": 0.15}}
 
 Q: Which planet is known as the Red Planet?
 {{"answer": "Mars", "p_true": 0.85}}
@@ -311,8 +342,9 @@ def extract_answer_and_model_conf(text: str):
     return t, None
 
 
-def build_prompt(q: str, style: str, allow_thinking: bool, fewshot_file: str = None) -> str:
-    """Build the evaluation prompt based on style + whether we allow thinking."""
+def build_prompt(q: str, style: str, allow_thinking: bool, fewshot_file: str = None,
+                 allow_unknown: bool = False) -> str:
+    """Build the evaluation prompt based on style + whether we allow thinking, and dataset policy."""
     if allow_thinking:
         if style == "fewshot_fixed":
             return FEWSHOT_FIXED_THINKING.format(EVAL_QUESTION=q)
@@ -331,7 +363,8 @@ def build_prompt(q: str, style: str, allow_thinking: bool, fewshot_file: str = N
             ).format(Q=q)
     else:
         if style == "fewshot_fixed":
-            return FEWSHOT_FIXED_FINAL_ONLY.format(EVAL_QUESTION=q)
+            template = FEWSHOT_FIXED_SQUADV2 if allow_unknown else FEWSHOT_FIXED_ANSWERABLE
+            return template.format(EVAL_QUESTION=q)
         elif style == "fewshot_file":
             assert fewshot_file and os.path.exists(fewshot_file), \
                 f"--fewshot_file missing or not found: {fewshot_file}"
@@ -354,6 +387,44 @@ def parse_analysis_final(text: str):
     final = re.split(r"\n(?:Analysis:|Final:)", final)[0].strip()
     return analysis, final
 
+@torch.inference_mode()
+def _rescore_answer_mean_logprob(model, prompt: str, answer: str) -> Optional[float]:
+    """
+    Try to compute the teacher-forced mean token logprob of `answer` under `prompt`.
+    Returns None if the backend doesn't expose a raw HF model interface.
+    """
+    try:
+        tok = model.tok
+        hf_model = getattr(model, "model", None)
+        if hf_model is None:
+            return None
+
+        # Tokenize prompt and answer
+        enc_prompt = tok(prompt, return_tensors="pt", add_special_tokens=True)
+        enc_ans = tok(answer, return_tensors="pt", add_special_tokens=False)
+
+        # Concatenate
+        input_ids = torch.cat([enc_prompt["input_ids"], enc_ans["input_ids"]], dim=1)
+        attn = torch.ones_like(input_ids)
+
+        # Labels: ignore prompt tokens, supervise only answer tokens
+        labels = input_ids.clone()
+        labels[:, :enc_prompt["input_ids"].shape[1]] = -100  # ignore prompt via -100
+
+        # Move to the model device (best guess: first param device)
+        dev = next(hf_model.parameters()).device
+        input_ids = input_ids.to(dev)
+        attn = attn.to(dev)
+        labels = labels.to(dev)
+
+        out = hf_model(input_ids=input_ids, attention_mask=attn, labels=labels, use_cache=False)
+        # out.loss is mean over non -100; also compute explicit mean logprob:
+        # mean_nll = loss.item(); mean_logprob = -mean_nll
+        mean_logprob = -float(out.loss.item())
+        return mean_logprob
+    except Exception:
+        return None
+
 # --------------- Main ----------------
 
 def main(cfg: Cfg, args):
@@ -372,10 +443,14 @@ def main(cfg: Cfg, args):
     allow_thinking_effective = args.allow_thinking
 
     if backend in ("qwen", "gemma"):
-        # Force FINAL-ONLY + FEWSHOT_FIXED_FINAL_ONLY for plain LMs
+        # Force FINAL-ONLY + FEWSHOT_FIXED for plain LMs
         prompt_style_effective = "fewshot_fixed"
         thinking_mode_effective = "off"
         allow_thinking_effective = False
+
+    # Dataset policy: allow 'Unknown' only on SQuAD v2
+    ds_name = cfg.data.dataset.lower()
+    allow_unknown = ("squad" in ds_name and "v2" in ds_name) or (ds_name in {"squad_v2", "squad2", "squad2.0"})
 
     max_new_tokens = args.max_new_tokens or cfg.model.max_new_tokens
     force_final = not allow_thinking_effective  # final-only if we DON'T allow thinking
@@ -453,6 +528,8 @@ def main(cfg: Cfg, args):
     else:
         raise ValueError(f"Unknown backend: {backend}")
 
+    # === dataset ===
+    # Allow CLI overrides for dataset/split without editing YAML (handled in __main__)
     limit = args.limit or cfg.data.limit
     ds = load_qa(cfg.data.dataset, cfg.data.split, limit)
 
@@ -463,10 +540,15 @@ def main(cfg: Cfg, args):
     preds, refs, rows = [], [], []
     total_tokens, total_time = 0, 0.0
 
+    # for Brier score accumulation
+    brier_sum = 0.0
+    brier_n = 0
+
     bar = tqdm(ds, desc="baseline", dynamic_ncols=True)
     for idx, ex in enumerate(bar):
         q, gold = ex["question"], ex["answers"]
-        prompt = build_prompt(q, prompt_style_effective, allow_thinking_effective, args.fewshot_file)
+        prompt = build_prompt(q, prompt_style_effective, allow_thinking_effective,
+                              args.fewshot_file, allow_unknown=allow_unknown)
 
         t0 = time.perf_counter()
         inp, gen = model.generate_with_states(prompt)
@@ -503,6 +585,9 @@ def main(cfg: Cfg, args):
         conf_entropy = None              # exp(-entropy_last) (kept for backward-compat)
         conf_entropy_mean = None         # exp(-mean content entropy)
         seq_conf = None                  # geometric mean token prob over content tokens
+        lp_mean = None                   # path mean logprob (redundant w/ seq_conf)
+        margin_last = None
+        margin_mean = None
 
         try:
             scores = gen.scores  # list length = #gen tokens; each is [1, vocab]
@@ -529,13 +614,29 @@ def main(cfg: Cfg, args):
 
                 if len(gen_ids_seq) == len(scores_iter) and len(gen_ids_seq) > 0:
                     logps = []
+                    margins = []
                     for logit_step, tok_id in zip(scores_iter, gen_ids_seq):
                         lsm = torch.nn.functional.log_softmax(logit_step[0].float(), dim=-1)
                         logps.append(float(lsm[tok_id].item()))
+                        top2 = torch.topk(lsm, k=2).values
+                        margins.append(float(top2[0] - top2[1]))
                     avg_logp = sum(logps) / len(logps)
                     seq_conf = float(math.exp(avg_logp))  # in [0,1]
+                    lp_mean = float(avg_logp)
+                    margin_last = float(margins[-1]) if margins else None
+                    margin_mean = float(sum(margins) / len(margins)) if margins else None
         except Exception:
             pass
+
+        # -------- answer re-scoring (teacher-forced) --------
+        canon_json = None
+        try:
+            pt = model_conf if model_conf is not None else 0.0
+            safe_ans = ans.replace('"', '\\"')
+            canon_json = f'{{"answer":"{safe_ans}","p_true":{pt:.2f}}}'
+        except Exception:
+            pass
+        rescore_logp = _rescore_answer_mean_logprob(model, prompt, canon_json if canon_json else ans)
 
         gen_len = int(new_ids.shape[-1])
         total_tokens += gen_len
@@ -547,16 +648,24 @@ def main(cfg: Cfg, args):
         preds.append(ans)
         refs.append(gold)
 
+        # Brier accumulation if model_conf available
+        if model_conf is not None:
+            diff = float(model_conf) - float(em_i)
+            brier_sum += diff * diff
+            brier_n += 1
+
         if idx == 0 or args.debug_first:
             print("[debug] head:", ans[:200].replace("\n", "\\n"))
             if isinstance(gold, (list, tuple)) and gold:
                 print("[debug] gold:", gold[0])
             else:
                 print("[debug] gold:", gold)
-            print("[debug] model_conf:", model_conf)
+            print("[debug] model_p_true:", model_conf)
             print("entropy_last:", entropy_last, "| entropy_mean_content:", entropy_mean,
                   "| conf_entropy_last:", conf_entropy, "| conf_entropy_mean:", conf_entropy_mean,
-                  "| seq_conf:", seq_conf)
+                  "| seq_conf:", seq_conf, "| lp_mean:", lp_mean,
+                  "| margin_last:", margin_last, "| margin_mean:", margin_mean,
+                  "| rescore_logp:", rescore_logp)
             print("[debug] tail:", ans[-200:].replace("\n", "\\n"))
             print("[debug] raw:", raw_text.replace("\n", "\\n"))
 
@@ -580,16 +689,30 @@ def main(cfg: Cfg, args):
             "conf_entropy": conf_entropy,                # exp(-H_last)  (legacy)
             "conf_entropy_mean": conf_entropy_mean,      # exp(-mean H_content)
             "seq_conf": seq_conf,                        # geometric mean token prob over content tokens
+            "lp_mean": lp_mean,                          # mean logprob along path
+            "margin_last": margin_last,
+            "margin_mean": margin_mean,
 
-            "model_confidence": model_conf,              # from model JSON (if provided)
+            "model_confidence": model_conf,              # parsed p_true (if provided)
             "references": gold,
             "gen_tokens": gen_len,
             "gen_time": round(dt, 3),
             "analysis": analysis_txt,
             "raw_output": raw_text,
+
+            # teacher-forced re-scoring
+            "rescore_logp": rescore_logp,
         })
 
     overall_metrics = evaluate_batch(preds, refs)
+
+    # Brier finalize
+    if brier_n > 0:
+        overall_metrics["brier"] = brier_sum / brier_n
+        overall_metrics["brier_n"] = brier_n
+        print(f"[brier] on {brier_n} examples: {overall_metrics['brier']:.4f}")
+    else:
+        print("[brier] skipped (no p_true emitted by model)")
 
     if total_time > 0 and len(preds) > 0:
         print(f"[baseline] avg toks/ex: {total_tokens/len(preds):.1f} | "
@@ -609,7 +732,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/default.yaml")
     ap.add_argument("--dataset", type=str, default=None,
-                    help="Override dataset name (triviaqa | squad | nq_open | hotpot_qa)")
+                    help="Override dataset name (triviaqa | squad | squad_v2 | nq_open | hotpot_qa)")
     ap.add_argument("--split", type=str, default=None,
                     help="Override split (train | validation)")
     ap.add_argument("--limit", type=int, default=None, help="override dataset size")

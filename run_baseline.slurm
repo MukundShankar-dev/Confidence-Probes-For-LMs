@@ -52,33 +52,33 @@ python -m scripts.run_baseline \
 
 # python -m scripts.merge_results results/triviaqa/qwen
 
-# python -m scripts.run_baseline \
-#   --config configs/default.yaml \
-#   --dataset triviaqa \
-#   --split validation \
-#   --backend gemma \
-#   --model_id "google/gemma-3-12b-it" \
-#   --thinking_mode off \
-#   --prompt_style fewshot_fixed \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" \
-#   --shard_id "$shard_id" \
-#   --save_jsonl "results/triviaqa/gemma/gemma_final_only_shard${shard_id}.json"
+python -m scripts.run_baseline \
+  --config configs/default.yaml \
+  --dataset triviaqa \
+  --split validation \
+  --backend gemma \
+  --model_id "google/gemma-3-12b-it" \
+  --thinking_mode off \
+  --prompt_style fewshot_fixed \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" \
+  --shard_id "$shard_id" \
+  --save_jsonl "results/triviaqa/gemma/gemma_final_only_shard${shard_id}.json"
 
 # python -m scripts.merge_results results/triviaqa/gemma
 
-# python -m scripts.run_baseline \
-#   --config configs/default.yaml \
-#   --dataset triviaqa \
-#   --split validation \
-#   --backend llama31 \
-#   --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
-#   --thinking_mode off \
-#   --prompt_style fewshot_fixed \
-#   --max_new_tokens 64 \
-#   --num_shards $num_shards \
-#   --shard_id $shard_id \
-#   --save_jsonl results/triviaqa/llama31/llama31_final_only_shard${shard_id}.json
+python -m scripts.run_baseline \
+  --config configs/default.yaml \
+  --dataset triviaqa \
+  --split validation \
+  --backend llama31 \
+  --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --thinking_mode off \
+  --prompt_style fewshot_fixed \
+  --max_new_tokens 64 \
+  --num_shards $num_shards \
+  --shard_id $shard_id \
+  --save_jsonl results/triviaqa/llama31/llama31_final_only_shard${shard_id}.json
 
 # python -m scripts.merge_results results/triviaqa/llama31
 
@@ -110,31 +110,31 @@ python -m scripts.run_baseline \
   --shard_id "$shard_id" \
   --save_jsonl results/hotpotqa/qwen/qwen_final_only_shard${shard_id}.json
 
-# python -m scripts.run_baseline \
-#   --config configs/default.yaml \
-#   --dataset hotpot_qa \
-#   --split validation \
-#   --backend gemma \
-#   --model_id "google/gemma-3-12b-it" \
-#   --thinking_mode off \
-#   --prompt_style fewshot_fixed \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" \
-#   --shard_id "$shard_id" \
-#   --save_jsonl results/hotpotqa/gemma/gemma_final_only_shard${shard_id}.json
+python -m scripts.run_baseline \
+  --config configs/default.yaml \
+  --dataset hotpot_qa \
+  --split validation \
+  --backend gemma \
+  --model_id "google/gemma-3-12b-it" \
+  --thinking_mode off \
+  --prompt_style fewshot_fixed \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" \
+  --shard_id "$shard_id" \
+  --save_jsonl results/hotpotqa/gemma/gemma_final_only_shard${shard_id}.json
 
-# python -m scripts.run_baseline \
-#   --config configs/default.yaml \
-#   --dataset hotpot_qa \
-#   --split validation \
-#   --backend llama31 \
-#   --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
-#   --thinking_mode off \
-#   --prompt_style fewshot_fixed \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" \
-#   --shard_id "$shard_id" \
-#   --save_jsonl results/hotpotqa/llama31/llama31_final_only_shard${shard_id}.json
+python -m scripts.run_baseline \
+  --config configs/default.yaml \
+  --dataset hotpot_qa \
+  --split validation \
+  --backend llama31 \
+  --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --thinking_mode off \
+  --prompt_style fewshot_fixed \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" \
+  --shard_id "$shard_id" \
+  --save_jsonl results/hotpotqa/llama31/llama31_final_only_shard${shard_id}.json
 
 # === SQuADv2 EXPERIMENTS ===
 
@@ -151,31 +151,31 @@ python -m scripts.run_baseline \
   --shard_id "$shard_id" \
   --save_jsonl results/squadv2/qwen/qwen_final_only_shard${shard_id}.json
 
-# python -m scripts.run_baseline \
-#   --config configs/default.yaml \
-#   --dataset squad_v2 \
-#   --split validation \
-#   --backend gemma \
-#   --model_id "google/gemma-3-12b-it" \
-#   --thinking_mode off \
-#   --prompt_style fewshot_fixed \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" \
-#   --shard_id "$shard_id" \
-#   --save_jsonl results/squadv2/gemma/gemma_final_only_shard${shard_id}.json
+python -m scripts.run_baseline \
+  --config configs/default.yaml \
+  --dataset squad_v2 \
+  --split validation \
+  --backend gemma \
+  --model_id "google/gemma-3-12b-it" \
+  --thinking_mode off \
+  --prompt_style fewshot_fixed \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" \
+  --shard_id "$shard_id" \
+  --save_jsonl results/squadv2/gemma/gemma_final_only_shard${shard_id}.json
 
-# python -m scripts.run_baseline \
-#   --config configs/default.yaml \
-#   --dataset squad_v2 \
-#   --split validation \
-#   --backend llama31 \
-#   --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
-#   --thinking_mode off \
-#   --prompt_style fewshot_fixed \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" \
-#   --shard_id "$shard_id" \
-#   --save_jsonl results/squadv2/llama31/llama31_final_only_shard${shard_id}.json
+python -m scripts.run_baseline \
+  --config configs/default.yaml \
+  --dataset squad_v2 \
+  --split validation \
+  --backend llama31 \
+  --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --thinking_mode off \
+  --prompt_style fewshot_fixed \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" \
+  --shard_id "$shard_id" \
+  --save_jsonl results/squadv2/llama31/llama31_final_only_shard${shard_id}.json
 
 
 

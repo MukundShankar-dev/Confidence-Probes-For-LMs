@@ -8,8 +8,24 @@ def natural_shard_key(path: str):
     m = re.search(r"shard(\d+)", os.path.basename(path))
     return (0, int(m.group(1))) if m else (1, path)
 
+def _to_float01(val):
+    """Parse floats or percent-like strings to [0,1], else return None."""
+    if val is None:
+        return None
+    try:
+        s = str(val).strip().replace("％", "%")
+        if s.endswith("%"):
+            v = float(s[:-1]) / 100.0
+        else:
+            v = float(s)
+        if v > 1.0:  # tolerate 0..100
+            v = v / 100.0
+        return max(0.0, min(1.0, v))
+    except Exception:
+        return None
+
 def main():
-    ap = argparse.ArgumentParser(description="Merge TriviaQA shard files and evaluate.")
+    ap = argparse.ArgumentParser(description="Merge shard files and evaluate (EM/F1 + Brier).")
     ap.add_argument("model_dir", help="Directory like results/triviaqa/{model}")
     ap.add_argument("--out", help="Override output path (.jsonl). Default: {model_dir}/{model}_final_only_all.jsonl")
     ap.add_argument("--pattern", help="Custom glob inside model_dir (overrides inference), e.g. '*_final_only_shard*.json'")
@@ -35,7 +51,7 @@ def main():
         files = sorted(glob.glob(primary), key=natural_shard_key)
         shard_glob = primary
         if not files:
-            # Fallback to any prefix (helps if files are named like '8b_final_only_shard*.json')
+            # Fallback to any prefix (e.g., '8b_final_only_shard*.json')
             fallback = os.path.join(model_dir, "*_final_only_shard*.json")
             files = sorted(glob.glob(fallback), key=natural_shard_key)
             shard_glob = fallback
@@ -47,6 +63,7 @@ def main():
     out_path = args.out or os.path.join(model_dir, f"{model}_final_only_all.jsonl")
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
+    # ---------- Merge ----------
     global_idx = 0
     with open(out_path, "w", encoding="utf-8") as w:
         for fp in files:
@@ -58,7 +75,7 @@ def main():
                         continue
                     row = json.loads(line)
                     if row.get("overall"):
-                        continue
+                        continue  # skip per-shard summaries
                     row["shard_id"] = shard_id
                     row["local_idx"] = row.get("idx")
                     row["global_idx"] = global_idx
@@ -72,8 +89,11 @@ def main():
     if args.no_eval:
         return
 
-    # Evaluate (if fields present)
+    # ---------- Evaluate from merged ----------
     preds, refs = [], []
+    brier_sum = 0.0
+    brier_n = 0
+
     with open(out_path, "r", encoding="utf-8") as f:
         for line in f:
             if not line.strip():
@@ -81,14 +101,35 @@ def main():
             row = json.loads(line)
             if row.get("overall"):
                 continue
+            # EM/F1 batch eval (prediction + references)
             if "prediction" in row and "references" in row:
                 preds.append(row["prediction"])
                 refs.append(row["references"])
+            # Brier (needs model_confidence and ground-truth correctness)
+            # Prefer explicit per-row EM if present; else infer from refs/pred?
+            # (We rely on 'em' which run_baseline writes.)
+            if "model_confidence" in row and "em" in row:
+                p = _to_float01(row["model_confidence"])
+                y = int(row["em"]) if isinstance(row["em"], (int, bool)) else None
+                if p is not None and y in (0, 1):
+                    brier_sum += (p - y) ** 2
+                    brier_n += 1
 
+    # Print metrics
     if preds and refs and len(preds) == len(refs):
-        print(evaluate_batch(preds, refs))
+        metrics = evaluate_batch(preds, refs)
     else:
-        print("[eval] skipped: missing 'prediction'/'references' fields in merged rows or empty set.")
+        metrics = {}
+        print("[eval] EM/F1 skipped: missing 'prediction'/'references' in merged rows or empty set.")
+
+    if brier_n > 0:
+        metrics["brier"] = brier_sum / brier_n
+        metrics["brier_n"] = brier_n
+    else:
+        print("[eval] Brier skipped: no usable 'model_confidence'+'em' pairs in merged rows.")
+
+    if metrics:
+        print(metrics)
 
 if __name__ == "__main__":
     main()
