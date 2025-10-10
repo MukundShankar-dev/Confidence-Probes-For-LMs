@@ -8,7 +8,7 @@
 #SBATCH --time=6:00:00
 #SBATCH -o logs/%x_%A_%a.out
 #SBATCH -e logs/%x_%A_%a.err
-#SBATCH --array=0-0
+#SBATCH --array=0-50
 
 set -euo pipefail
 
@@ -30,11 +30,11 @@ conda activate llm
 export PYTHONUNBUFFERED=1
 reasoning=medium
 
-# num_shards=$SLURM_ARRAY_TASK_COUNT
-# shard_id=$SLURM_ARRAY_TASK_ID
+num_shards=$SLURM_ARRAY_TASK_COUNT
+shard_id=$SLURM_ARRAY_TASK_ID
 
-num_shards=1000
-shard_id=0
+# num_shards=1000
+# shard_id=0
 
 # === TRIVIAQA EXPERIMENTS ===
 python -m scripts.run_baseline \
