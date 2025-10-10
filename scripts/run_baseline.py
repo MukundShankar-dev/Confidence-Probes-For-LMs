@@ -19,6 +19,7 @@ from src.eval.metrics import evaluate_batch, squad_em, squad_f1
 
 import math
 import sys
+import ast
 
 # Allow fast math
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -35,34 +36,34 @@ ZERO_SHOT_FINAL_ONLY = (
 FEWSHOT_FIXED_FINAL_ONLY = """You are answering trivia questions.
 Return only a single JSON object with fields:
 - "answer": the short factual span (1–5 words, no punctuation)
-- "confidence": your probability (0.0–1.0) that the answer is correct (round to two decimals)
+- "p_true": the probability (0.0–1.0) that this answer is correct (round to two decimals)
 
 Calibration guidance:
 - Report your true probability; do NOT inflate.
 - Overconfidence is penalized by proper scoring (Brier). If unsure, choose a lower value.
-- If multiple plausible answers exist or the question is ambiguous, reduce confidence appropriately.
-- If you do not know, answer "Unknown" with low confidence.
+- If multiple plausible answers exist or the question is ambiguous, reduce p_true appropriately.
 
 Q: Who wrote Hamlet?
-{{"answer": "William Shakespeare", "confidence": 0.95}}
+{{"answer": "William Shakespeare", "p_true": 0.95}}
 
 Q: What is the capital of France?
-{{"answer": "Paris", "confidence": 0.92}}
+{{"answer": "Paris", "p_true": 0.92}}
 
 Q: What is the capital of South Africa?
-{{"answer": "Pretoria", "confidence": 0.60}}
+{{"answer": "Pretoria", "p_true": 0.60}}
 
-Q: Which element has the symbol 'Xx'?
-{{"answer": "Unknown", "confidence": 0.15}}
+Q: Which element has the symbol 'Au'?
+{{"answer": "Aluminum", "p_true": 0.15}}
 
 Q: Who authored the Voynich Manuscript?
-{{"answer": "Unknown", "confidence": 0.20}}
+{{"answer": "Unknown", "p_true": 0.20}}
 
 Q: Which planet is known as the Red Planet?
-{{"answer": "Mars", "confidence": 0.85}}
+{{"answer": "Mars", "p_true": 0.85}}
 
 Q: {EVAL_QUESTION}
 """
+
 
 FEWSHOT_FIXED_THINKING = """You are answering trivia questions. Be concise.
 
@@ -118,85 +119,196 @@ def _softmax_entropy_vec(logits_vec: torch.Tensor) -> float:
     logp = torch.log(probs.clamp_min(1e-12))
     return float(-(probs * logp).sum().item())
 
+def _clamp01_from_any(x):
+    try:
+        s = str(x).strip().replace("％", "%")
+        if s.endswith("%"):
+            v = float(s[:-1])
+        else:
+            v = float(s)
+    except Exception:
+        return None
+    if v > 1.0:
+        v = v / 100.0
+    return float(max(0.0, min(1.0, v)))
+
+def _norm_answer_text(ans):
+    if isinstance(ans, (list, tuple)):
+        for a in ans:
+            if isinstance(a, str) and a.strip():
+                return a.strip()
+        return str(ans[0]) if ans else ""
+    return ans.strip() if isinstance(ans, str) else (str(ans) if ans is not None else "")
+
 def extract_answer_and_model_conf(text: str):
     """
-    Robustly parse:
-      {"answer": "...", "confidence": 0.92}
-    Also tolerates key variants like "conference", "conf", "confidence_score", "probability".
-    Returns (answer_text, model_confidence or None).
+    Parse model output into (answer, p_true).
+    Canonical key: 'p_true'. Also accepts confidence/probability variants and CJK keys.
+    Robust to:
+      - JSON
+      - single-quoted Python dicts
+      - JSON encoded as a STRING (need double-decode)
+      - over-escaped quotes/backslashes like {\"answer\":\"...\", \\\"p_true\\\":0.70}
     """
+    import json, re, sys
     global _JSON_ERR_SEEN
-    t = text.strip()
+
+    ANSWER_KEYS = {
+        "answer", "final", "prediction",
+        "答案", "回答", "最终", "最終", "解答",
+    }
+    PROB_KEYS = {
+        "p_true",
+        # english variants
+        "confidence", "conference", "conf", "confidence_score",
+        "confidencelevel", "confidence_level", "prob", "probability", "p",
+        # chinese/japanese
+        "信心", "置信度", "置信", "概率", "可能性", "信心分数", "信心分", "自信度",
+    }
+
+    t = (text or "").strip()
 
     # strip code fences
     if t.startswith("```"):
-        t = t.strip()
         t = t.lstrip("`")
         if "\n" in t:
             t = t.split("\n", 1)[1].strip()
         if t.endswith("```"):
             t = t[:-3].strip()
 
-    # try JSON first
+    # Extract the outermost {...} slice if present
     start, end = t.find("{"), t.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        candidate = t[start:end+1]
+    candidate = t[start:end+1] if (start != -1 and end != -1 and end > start) else t
+
+    def _parse_mapping(maybe_dict_text: str):
+        """
+        Try a sequence of increasingly aggressive parses.
+        Returns a dict or None.
+        """
+        s = maybe_dict_text
+
+        # attempt up to 4 passes (handles JSON-as-string / nested escaping)
+        for _ in range(4):
+            # 1) strict JSON
+            try:
+                obj = json.loads(s)
+                if isinstance(obj, dict):
+                    return obj
+                if isinstance(obj, str):
+                    # JSON string containing JSON -> unwrap and loop
+                    s = obj
+                    continue
+            except Exception:
+                pass
+
+            # 2) python literal (single quotes, etc.)
+            try:
+                obj = ast.literal_eval(s)
+                if isinstance(obj, dict):
+                    return obj
+                if isinstance(obj, str):
+                    s = obj
+                    continue
+            except Exception:
+                pass
+
+            # 3) naive repair of over-escaped sequences, then try JSON again
+            repaired = s
+            # collapse double-escaping first
+            repaired = repaired.replace('\\\\\\"', '\\"')
+            repaired = repaired.replace('\\\\"', '\\"')
+            # then unescape \" -> "
+            repaired = repaired.replace('\\"', '"')
+            # and \\ -> \
+            repaired = repaired.replace('\\\\', '\\')
+
+            if repaired != s:
+                s = repaired
+                # loop again with the repaired string
+                continue
+
+            # nothing changed; break out
+            break
+
+        return None
+
+    def _from_mapping(obj):
+        # Try exact keys (including CJK) then lower-cased fallbacks
+        ans = ""
+        p_true = None
+
+        # answer
+        for k, v in obj.items():
+            kl = str(k).strip().lower()
+            if kl in ANSWER_KEYS or str(k) in ANSWER_KEYS:
+                ans = _norm_answer_text(v)
+                break
+        if not ans:
+            norm = {str(k).strip().lower(): v for k, v in obj.items()}
+            for k in ANSWER_KEYS:
+                if k in norm:
+                    ans = _norm_answer_text(norm[k]); break
+
+        # probability: prefer p_true, then variants
+        for k, v in obj.items():
+            if str(k).strip().lower() == "p_true":
+                p_true = _clamp01_from_any(v); break
+        if p_true is None:
+            for k, v in obj.items():
+                kl = str(k).strip().lower()
+                if kl in PROB_KEYS or str(k) in PROB_KEYS:
+                    p_true = _clamp01_from_any(v); break
+        if p_true is None:
+            norm = {str(k).strip().lower(): v for k, v in obj.items()}
+            for k in ["p_true"] + [x for x in PROB_KEYS if x != "p_true"]:
+                if k in norm:
+                    p_true = _clamp01_from_any(norm[k]); break
+
+        return ans, p_true
+
+    # Try parsing as a mapping with aggressive fallbacks
+    obj = _parse_mapping(candidate)
+    if isinstance(obj, dict):
+        return _from_mapping(obj)
+    else:
+        # Warn once if our best parse failed
         try:
-            obj = json.loads(candidate)
-
-            # normalize keys (case-insensitive)
-            norm = {k.strip().lower(): v for k, v in obj.items()}
-
-            # pick answer
-            ans = (norm.get("answer") or norm.get("final") or norm.get("prediction") or "").strip()
-
-            # map common variants to 'confidence'
-            conf = None
-            for key in [
-                "confidence", "conference", "conf", "confidence_score",
-                "confidencelevel", "confidence_level", "prob", "probability",
-                "confident"
-            ]:
-                if key in norm and isinstance(norm[key], (int, float, str)):
-                    try:
-                        conf = float(norm[key])
-                        break
-                    except Exception:
-                        pass
-
-            # clamp if present
-            if conf is not None:
-                conf = float(max(0.0, min(1.0, conf)))
-
-            return ans, conf
-        except Exception as e:
             if not _JSON_ERR_SEEN:
-                print(f"[warn] JSON parse failed in extract_answer_and_model_conf: {e}", file=sys.stdout, flush=True)
+                print("[warn] Could not parse model JSON; falling back to regex.", file=sys.stdout, flush=True)
                 _JSON_ERR_SEEN = True
+        except Exception:
+            pass
 
-    # regex fallback: capture answer and a numeric after a confidence-like key
+    # Regex fallback (tolerates both ' and " and %/％, and some escaping)
     m = re.search(
-        r'"answer"\s*:\s*"(?P<ans>[^"]*)".*?(?:"conf(?:idence|erence|idence_score)?|prob(?:ability)?)\s*:\s*(?P<conf>-?\d+(?:\.\d+)?)',
-        t,
-        flags=re.DOTALL | re.IGNORECASE,
+        r"""(?ix)
+        [\{\[]?        # optional leading brace
+        .*?
+        (["']|\\?["'])?(?:answer|答案|回答|最终|最終|解答)\1?\s*:\s*(["'])(?P<ans>.*?)\2
+        .*?
+        (["']|\\?["'])?(?:p_true|conf(?:idence|erence|idence_score)?|prob(?:ability)?|p|信心|置信度|置信|概率|可能性|信心分数|信心分|自信度)\4?
+        \s*:\s*(?P<prob>-?\d+(?:\.\d+)?(?:%|％)?)
+        .*?
+        [\}\]]?        # optional trailing brace
+        """,
+        candidate,
+        flags=re.DOTALL,
     )
     if m:
         ans = m.group("ans").strip()
-        conf = float(m.group("conf"))
-        conf = float(max(0.0, min(1.0, conf)))
-        return ans, conf
+        p_true = _clamp01_from_any(m.group("prob"))
+        return ans, p_true
 
-    # legacy fallback: [CONF=...]
+    # Legacy fallback: "text [CONF=...]" style
     m = re.search(r"(.*?)(?:\s*\[CONF\s*=\s*([0-9.]+)\s*\]\s*)?$", t)
     if m:
         ans = m.group(1).strip()
-        conf = float(m.group(2)) if m.group(2) is not None else None
-        if conf is not None:
-            conf = float(max(0.0, min(1.0, conf)))
-        return ans, conf
+        p_true = _clamp01_from_any(m.group(2)) if m.group(2) is not None else None
+        return ans, p_true
 
-    # give up
+    # give up: return raw text as answer, None prob
     return t, None
+
 
 def build_prompt(q: str, style: str, allow_thinking: bool, fewshot_file: str = None) -> str:
     """Build the evaluation prompt based on style + whether we allow thinking."""

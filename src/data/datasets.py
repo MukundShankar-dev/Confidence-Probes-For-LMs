@@ -105,14 +105,21 @@ def load_qa(name: str, split: str, limit: int):
         ds = load_dataset("squad_v2", split=split)
 
         def _fmt(ex):
-            ans_list = ex["answers"]["text"] if isinstance(ex.get("answers"), dict) and "text" in ex["answers"] else ex.get("answers", [])
-            if isinstance(ans_list, str): ans_list = [ans_list]
+            # HF: ex["answers"]["text"] is [] for unanswerables
+            ans_list = []
+            if isinstance(ex.get("answers"), dict):
+                ans_list = ex["answers"].get("text", []) or []
+            # Canonicalize no-answer so references is never empty
+            if not ans_list:
+                ans_list = ["Unknown"]  # <- sentinel that matches your prompt + metrics normalization
             return {
-                "question": ex["question"],
+                "question": ex.get("question", ""),
                 "answers": _dedupe_nonempty(list(ans_list)),
                 "context": ex.get("context", "") or "",
             }
+
         ds = ds.map(_fmt, remove_columns=ds.column_names)
+
 
     elif name in {"nq_open", "natural_questions_open", "naturalquestions_open"}:
         ds = load_dataset("nq_open", split=split)

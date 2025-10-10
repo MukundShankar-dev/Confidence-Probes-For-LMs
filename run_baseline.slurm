@@ -5,10 +5,10 @@
 #SBATCH --account=vulcan-abhinav
 #SBATCH --gres=gpu:rtxa6000:1
 #SBATCH --mem=64G
-#SBATCH --time=2:00:00
+#SBATCH --time=6:00:00
 #SBATCH -o logs/%x_%A_%a.out
 #SBATCH -e logs/%x_%A_%a.err
-#SBATCH --array=0-50
+#SBATCH --array=0-0
 
 set -euo pipefail
 
@@ -30,22 +30,25 @@ conda activate llm
 export PYTHONUNBUFFERED=1
 reasoning=medium
 
-num_shards=$SLURM_ARRAY_TASK_COUNT
-shard_id=$SLURM_ARRAY_TASK_ID
+# num_shards=$SLURM_ARRAY_TASK_COUNT
+# shard_id=$SLURM_ARRAY_TASK_ID
+
+num_shards=1000
+shard_id=0
 
 # === TRIVIAQA EXPERIMENTS ===
-# python -m scripts.run_baseline \
-#   --config configs/default.yaml \
-#   --dataset triviaqa \
-#   --split validation \
-#   --backend qwen \
-#   --model_id "Qwen/Qwen2.5-7B-Instruct" \
-#   --thinking_mode off \
-#   --prompt_style fewshot_fixed \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" \
-#   --shard_id "$shard_id" \
-#   --save_jsonl "results/triviaqa/qwen/qwen_final_only_shard${shard_id}.json"
+python -m scripts.run_baseline \
+  --config configs/default.yaml \
+  --dataset triviaqa \
+  --split validation \
+  --backend qwen \
+  --model_id "Qwen/Qwen2.5-7B-Instruct" \
+  --thinking_mode off \
+  --prompt_style fewshot_fixed \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" \
+  --shard_id "$shard_id" \
+  --save_jsonl "results/triviaqa/qwen/qwen_final_only_shard${shard_id}.json"
 
 # python -m scripts.merge_results results/triviaqa/qwen
 
@@ -75,7 +78,7 @@ shard_id=$SLURM_ARRAY_TASK_ID
 #   --max_new_tokens 64 \
 #   --num_shards $num_shards \
 #   --shard_id $shard_id \
-#   --save_jsonl results/triviaqa/llama31/8b_final_only_shard${shard_id}.json
+#   --save_jsonl results/triviaqa/llama31/llama31_final_only_shard${shard_id}.json
 
 # python -m scripts.merge_results results/triviaqa/llama31
 
@@ -94,49 +97,9 @@ shard_id=$SLURM_ARRAY_TASK_ID
 
 # === HOTPOTQA EXPERIMENTS ===
 
-# python -m scripts.run_baseline \
-#   --config configs/default.yaml \
-#   --dataset hotpot_qa \
-#   --split validation \
-#   --backend qwen \
-#   --model_id "Qwen/Qwen2.5-7B-Instruct" \
-#   --thinking_mode off \
-#   --prompt_style fewshot_fixed \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" \
-#   --shard_id "$shard_id" \
-#   --save_jsonl results/hotpotqa/qwen/qwen_final_only_shard${shard_id}.json
-
-# python -m scripts.run_baseline \
-#   --config configs/default.yaml \
-#   --dataset hotpot_qa \
-#   --split validation \
-#   --backend gemma \
-#   --model_id "google/gemma-3-12b-it" \
-#   --thinking_mode off \
-#   --prompt_style fewshot_fixed \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" \
-#   --shard_id "$shard_id" \
-#   --save_jsonl results/hotpotqa/gemma/gemma_final_only_shard${shard_id}.json
-
-# python -m scripts.run_baseline \
-#   --config configs/default.yaml \
-#   --dataset hotpot_qa \
-#   --split validation \
-#   --backend llama31 \
-#   --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
-#   --thinking_mode off \
-#   --prompt_style fewshot_fixed \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" \
-#   --shard_id "$shard_id" \
-#   --save_jsonl results/hotpotqa/llama31/8b_final_only_shard${shard_id}.json
-
-
 python -m scripts.run_baseline \
   --config configs/default.yaml \
-  --dataset squad_v2 \
+  --dataset hotpot_qa \
   --split validation \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-7B-Instruct" \
@@ -149,7 +112,7 @@ python -m scripts.run_baseline \
 
 # python -m scripts.run_baseline \
 #   --config configs/default.yaml \
-#   --dataset squad_v2 \
+#   --dataset hotpot_qa \
 #   --split validation \
 #   --backend gemma \
 #   --model_id "google/gemma-3-12b-it" \
@@ -162,6 +125,47 @@ python -m scripts.run_baseline \
 
 # python -m scripts.run_baseline \
 #   --config configs/default.yaml \
+#   --dataset hotpot_qa \
+#   --split validation \
+#   --backend llama31 \
+#   --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
+#   --thinking_mode off \
+#   --prompt_style fewshot_fixed \
+#   --max_new_tokens 64 \
+#   --num_shards "$num_shards" \
+#   --shard_id "$shard_id" \
+#   --save_jsonl results/hotpotqa/llama31/llama31_final_only_shard${shard_id}.json
+
+# === SQuADv2 EXPERIMENTS ===
+
+python -m scripts.run_baseline \
+  --config configs/default.yaml \
+  --dataset squad_v2 \
+  --split validation \
+  --backend qwen \
+  --model_id "Qwen/Qwen2.5-7B-Instruct" \
+  --thinking_mode off \
+  --prompt_style fewshot_fixed \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" \
+  --shard_id "$shard_id" \
+  --save_jsonl results/squadv2/qwen/qwen_final_only_shard${shard_id}.json
+
+# python -m scripts.run_baseline \
+#   --config configs/default.yaml \
+#   --dataset squad_v2 \
+#   --split validation \
+#   --backend gemma \
+#   --model_id "google/gemma-3-12b-it" \
+#   --thinking_mode off \
+#   --prompt_style fewshot_fixed \
+#   --max_new_tokens 64 \
+#   --num_shards "$num_shards" \
+#   --shard_id "$shard_id" \
+#   --save_jsonl results/squadv2/gemma/gemma_final_only_shard${shard_id}.json
+
+# python -m scripts.run_baseline \
+#   --config configs/default.yaml \
 #   --dataset squad_v2 \
 #   --split validation \
 #   --backend llama31 \
@@ -171,7 +175,7 @@ python -m scripts.run_baseline \
 #   --max_new_tokens 64 \
 #   --num_shards "$num_shards" \
 #   --shard_id "$shard_id" \
-#   --save_jsonl results/hotpotqa/llama31/8b_final_only_shard${shard_id}.json
+#   --save_jsonl results/squadv2/llama31/llama31_final_only_shard${shard_id}.json
 
 
 
