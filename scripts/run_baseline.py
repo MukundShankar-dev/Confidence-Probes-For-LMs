@@ -33,15 +33,17 @@ ZERO_SHOT_FINAL_ONLY = (
     "Q: {q}\nA: "
 )
 
-FEWSHOT_FIXED_FINAL_ONLY = """You are answering trivia questions.
+FEWSHOT_FIXED_FINAL_ONLY = """You are answering trivia and reading comprehension questions.
 Return only a single JSON object with fields:
-- "answer": the short factual span (1–5 words, no punctuation)
-- "p_true": the probability (0.0–1.0) that this answer is correct (round to two decimals)
+- "answer": the short factual span (1–5 words, no punctuation).
+  If the question cannot be answered from the given context, use "Unknown".
+- "p_true": the probability (0.0–1.0) that this answer is correct (round to two decimals).
 
 Calibration guidance:
 - Report your true probability; do NOT inflate.
 - Overconfidence is penalized by proper scoring (Brier). If unsure, choose a lower value.
 - If multiple plausible answers exist or the question is ambiguous, reduce p_true appropriately.
+- If no answer is supported by evidence, output "Unknown" with an appropriately low p_true.
 
 Q: Who wrote Hamlet?
 {{"answer": "William Shakespeare", "p_true": 0.95}}
@@ -63,7 +65,6 @@ Q: Which planet is known as the Red Planet?
 
 Q: {EVAL_QUESTION}
 """
-
 
 FEWSHOT_FIXED_THINKING = """You are answering trivia questions. Be concise.
 
