@@ -14,13 +14,9 @@ def _normalize(s: str) -> str:
         s = s.replace(ch, " ")
     for ch in UNICODE_DASHES:
         s = s.replace(ch, " ")
-    # 3) your existing steps
-    def remove_articles(t): return re.sub(
-        r"\b(a|an|the)\b", " ", t, flags=re.IGNORECASE)
-    def white_space_fix(t): return " ".join(t.split())
-    def remove_punc(t): return "".join(ch for ch in t if ch not in set(string.punctuation))
-    def lower(t): return t.lower()
-    return white_space_fix(remove_articles(remove_punc(lower(s))))
+    # 3) lowercase trim
+    s = s.strip()
+    return s
 
 def squad_em(pred: str, refs) -> bool:
     if not isinstance(refs, (list, tuple)): refs = [refs]
@@ -45,6 +41,27 @@ def squad_f1(pred: str, refs) -> float:
         best = max(best, f1)
     return best
 
+def _split_variants(s: str) -> Iterable[str]:
+    """
+    Split string into multiple answer variants by common separators; strip punctuation.
+    """
+    if not isinstance(s, str):
+        s = str(s)
+    s = s.strip()
+    if not s:
+        return []
+    # Common delimiters for multiple answers / aliases
+    parts = re.split(r"\s*[;/,]\s*|\s+or\s+|\s+aka\s+|\s+aka\.\s+", s, flags=re.IGNORECASE)
+    out = []
+    for p in parts:
+        t = p.strip()
+        if t:
+            # strip trailing punctuation like ".", "," etc.
+            t = t.strip(string.punctuation + " ")
+            if t:
+                out.append(t)
+    return out
+
 # -------------------- loaders --------------------
 
 def _dedupe_nonempty(xs: List[str]) -> List[str]:
@@ -59,11 +76,16 @@ def _dedupe_nonempty(xs: List[str]) -> List[str]:
 
 def load_qa(name: str, split: str, limit: int):
     """
-    Return a dataset with unified fields:
-      {"question": str, "answers": List[str], "context": str}
-    - SQuAD: keeps context (for RC later).
-    - NQ-Open: wraps single 'answer' into a list.
-    - TriviaQA (unfiltered): includes primary value + aliases.
+    Return a HuggingFace Dataset where each example is a dict:
+      { "question": str, "answers": List[str], "context": str }
+    NOTE: We keep `context` as an empty string for closed-book runs.
+
+    Supported names in this file:
+      - "squad"        -> huggingface 'squad'
+      - "squad_v2"     -> huggingface 'squad_v2'
+      - "nq_open"      -> huggingface 'nq_open'
+      - "triviaqa"     -> huggingface 'trivia_qa' (unfiltered)
+      - "hotpotqa"/"hotpot_qa" -> huggingface 'hotpot_qa' ('distractor' config)
     """
     if name == "squad":
         ds = load_dataset("squad", split=split)
@@ -79,12 +101,25 @@ def load_qa(name: str, split: str, limit: int):
             }
         ds = ds.map(_fmt, remove_columns=ds.column_names)
 
-    elif name == "nq_open":
+    elif name in {"squad_v2", "squad2", "squad2.0"}:
+        ds = load_dataset("squad_v2", split=split)
+
+        def _fmt(ex):
+            ans_list = ex["answers"]["text"] if isinstance(ex.get("answers"), dict) and "text" in ex["answers"] else ex.get("answers", [])
+            if isinstance(ans_list, str): ans_list = [ans_list]
+            return {
+                "question": ex["question"],
+                "answers": _dedupe_nonempty(list(ans_list)),
+                "context": ex.get("context", "") or "",
+            }
+        ds = ds.map(_fmt, remove_columns=ds.column_names)
+
+    elif name in {"nq_open", "natural_questions_open", "naturalquestions_open"}:
         ds = load_dataset("nq_open", split=split)
 
         def _fmt(ex):
-            ans = ex.get("answer", "")
-            ans_list = [ans] if isinstance(ans, str) else (ans or [])
+            ans_list = ex.get("answer", [])
+            if isinstance(ans_list, str): ans_list = [ans_list]
             return {
                 "question": ex["question"],
                 "answers": _dedupe_nonempty(list(ans_list)),
@@ -94,7 +129,6 @@ def load_qa(name: str, split: str, limit: int):
 
     elif name == "triviaqa":
         ds = load_dataset("trivia_qa", "unfiltered", split=split)
-
         def _fmt(ex):
             ans = ex["answer"]
             cand = [ans["value"]]
@@ -111,6 +145,16 @@ def load_qa(name: str, split: str, limit: int):
             return {"question": ex["question"], "answers": out, "context": ""}
         ds = ds.map(_fmt, remove_columns=ds.column_names)
 
+    elif name in {"hotpotqa", "hotpot_qa"}:
+        # Multi-hop HotpotQA; use 'distractor' config. Closed-book: keep context empty.
+        ds = load_dataset("hotpot_qa", "distractor", split=split)
+        def _fmt(ex):
+            return {
+                "question": ex.get("question", ""),
+                "answers": _dedupe_nonempty([ex.get("answer", "")]),
+                "context": "",
+            }
+        ds = ds.map(_fmt, remove_columns=ds.column_names)
 
     else:
         raise ValueError(f"Unknown dataset {name}")
