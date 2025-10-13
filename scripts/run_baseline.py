@@ -629,6 +629,9 @@ def main(cfg: Cfg, args):
                     lp_mean = float(avg_logp)
                     margin_last = float(margins[-1]) if margins else None
                     margin_mean = float(sum(margins) / len(margins)) if margins else None
+
+            entropy_std = statistics.pstdev(content_ents) if content_ents else None
+            margin_min = min(margins) if margins else None
         except Exception:
             pass
 
@@ -717,15 +720,15 @@ def main(cfg: Cfg, args):
             "margin_mean": margin_mean,
             "margin_last": margin_last,
             "margin_min": margin_min,        # probe features <-- FAIL?
-            "h_last_256": h_last_256,           # list[256]
-            "h_pool_256": h_pool_256,           # list[256]
-            "h_last_mid_256": h_last_mid_256,   # list[256]
-            "h_pool_mid_256": h_pool_mid_256,   # list[256]
-            "rescore_logp": rescore_lp,
+            "h_last_256": None,           # list[256]
+            "h_pool_256": None,           # list[256]
+            "h_last_mid_256": None,   # list[256]
+            "h_pool_mid_256": None,   # list[256]
+            "rescore_logp": rescore_logp,
             "answer_len": int(gen_len),
-            "parsed_json_ok": int(ans_text is not None and len(ans_text) > 0),
-            "parsed_p_true_ok": int(p_model is not None),
-            "is_unknown": int(ans_text.strip().lower() == "unknown"),
+            "parsed_json_ok": int(ans is not None and len(ans) > 0),
+            "parsed_p_true_ok": int(model_conf is not None),
+            "is_unknown": int(ans.strip().lower() == "unknown"),
         }
 
         p_true_probe = probe.predict(row_feats) if probe else None
