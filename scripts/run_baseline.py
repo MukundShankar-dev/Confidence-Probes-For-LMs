@@ -17,6 +17,8 @@ from src.models.llama32_11b import Llama32_11B
 from src.data.datasets import load_qa
 from src.eval.metrics import evaluate_batch, squad_em, squad_f1
 
+from src.probe.runtime import ProbeRuntime
+
 import math
 import sys
 import ast
@@ -537,6 +539,8 @@ def main(cfg: Cfg, args):
         ds = ds.shard(num_shards=args.num_shards, index=args.shard_id, contiguous=True)
         print(f"[shard] Using shard {args.shard_id}/{args.num_shards} with {len(ds)} examples")
 
+    probe = ProbeRuntime(args.probe_path) if args.probe_path else None
+
     preds, refs, rows = [], [], []
     total_tokens, total_time = 0, 0.0
 
@@ -703,6 +707,29 @@ def main(cfg: Cfg, args):
             # teacher-forced re-scoring
             "rescore_logp": rescore_logp,
         })
+
+        row_feats = {
+            "lp_mean": lp_mean,
+            "seq_conf": seq_conf,
+            "entropy_mean": entropy_mean,
+            "entropy_last": entropy_last,
+            "entropy_std": entropy_std,          # stddev over content tokens <-- FAIL? 
+            "margin_mean": margin_mean,
+            "margin_last": margin_last,
+            "margin_min": margin_min,        # probe features <-- FAIL?
+            "h_last_256": h_last_256,           # list[256]
+            "h_pool_256": h_pool_256,           # list[256]
+            "h_last_mid_256": h_last_mid_256,   # list[256]
+            "h_pool_mid_256": h_pool_mid_256,   # list[256]
+            "rescore_logp": rescore_lp,
+            "answer_len": int(gen_len),
+            "parsed_json_ok": int(ans_text is not None and len(ans_text) > 0),
+            "parsed_p_true_ok": int(p_model is not None),
+            "is_unknown": int(ans_text.strip().lower() == "unknown"),
+        }
+
+        p_true_probe = probe.predict(row_feats) if probe else None
+        rows[-1]["p_true_probe"] = p_true_probe
 
     overall_metrics = evaluate_batch(preds, refs)
 
