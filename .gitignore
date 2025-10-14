@@ -6,4 +6,5 @@ scripts/__pycache__/
 src/conf/__pycache__/
 src/eval/__pycache__/
 logs/
+data/
 .DS_Store

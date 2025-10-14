@@ -26,7 +26,7 @@ python -m scripts.collect_internals \
   --dataset triviaqa --split validation \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe/triviaqa/qwen/qwen_final_only_shard${shard_id}.json
+  --out data/probe/triviaqa/qwen/qwen_final_only_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend gemma \
@@ -34,7 +34,7 @@ python -m scripts.collect_internals \
   --dataset triviaqa --split validation \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe/triviaqa/gemma/gemma_final_only_shard${shard_id}.json
+  --out data/probe/triviaqa/gemma/gemma_final_only_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend llama31 \
@@ -42,7 +42,7 @@ python -m scripts.collect_internals \
   --dataset triviaqa --split validation \
   --max_new_tokens 64 \
   --num_shards $num_shards --shard_id $shard_id \
-  --out data/probe/triviaqa/llama31/llama31_final_only_shard${shard_id}.json
+  --out data/probe/triviaqa/llama31/llama31_final_only_shard${shard_id}.jsonl
 
 # === HOTPOTQA EXPERIMENTS ===
 
@@ -52,7 +52,7 @@ python -m scripts.collect_internals \
   --dataset hotpot_qa --split validation \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe/hotpotqa/qwen/qwen_final_only_shard${shard_id}.json
+  --out data/probe/hotpotqa/qwen/qwen_final_only_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend gemma \
@@ -60,7 +60,7 @@ python -m scripts.collect_internals \
   --dataset hotpot_qa --split validation \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe/hotpotqa/gemma/gemma_final_only_shard${shard_id}.json
+  --out data/probe/hotpotqa/gemma/gemma_final_only_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend llama31 \
@@ -68,7 +68,7 @@ python -m scripts.collect_internals \
   --dataset hotpot_qa --split validation \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe/hotpotqa/llama31/llama31_final_only_shard${shard_id}.json
+  --out data/probe/hotpotqa/llama31/llama31_final_only_shard${shard_id}.jsonl
 
 # === SQuADv2 EXPERIMENTS ===
 
@@ -78,7 +78,7 @@ python -m scripts.collect_internals \
   --dataset squad_v2 --split validation \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe/squadv2/qwen/qwen_final_only_shard${shard_id}.json
+  --out data/probe/squadv2/qwen/qwen_final_only_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend gemma \
@@ -86,7 +86,7 @@ python -m scripts.collect_internals \
   --dataset squad_v2 --split validation \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe/squadv2/gemma/gemma_final_only_shard${shard_id}.json
+  --out data/probe/squadv2/gemma/gemma_final_only_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend llama31 \
@@ -94,7 +94,7 @@ python -m scripts.collect_internals \
   --dataset squad_v2 --split validation \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe/squadv2/llama31/llama31_final_only_shard${shard_id}.json
+  --out data/probe/squadv2/llama31/llama31_final_only_shard${shard_id}.jsonl
 
 # DATASET OPTIONS:
 # # TriviaQA (unfiltered), validation split

@@ -199,7 +199,7 @@ def pack_256(vec: torch.Tensor):
 def main():
     ap = argparse.ArgumentParser()
     # data
-    ap.add_argument("--dataset", choices=["triviaqa", "hotpot_qa", "squadv2"], default="triviaqa")
+    ap.add_argument("--dataset", choices=["triviaqa", "hotpot_qa", "squad_v2"], default="triviaqa")
     ap.add_argument("--split", choices=["train", "validation", "test"], default="validation")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--num_shards", type=int, default=1)
