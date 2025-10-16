@@ -1,5 +1,6 @@
 {
   "tokens": [
+    "CLS",
     "h_last_256",
     "h_pool_256",
     "h_last_mid_256",
@@ -7,29 +8,8 @@
     "scalars_256"
   ],
   "layers": [
-    {
-      "layer": 1,
-      "tokens": [
-        "h_last_256",
-        "h_pool_256",
-        "h_last_mid_256",
-        "h_pool_mid_256",
-        "scalars_256"
-      ],
-      "path_csv": "probes/backend_llama/probe_xform/attn_layer1.csv",
-      "path_png": "probes/backend_llama/probe_xform/attn_layer1.png"
-    },
-    {
-      "layer": 2,
-      "tokens": [
-        "h_last_256",
-        "h_pool_256",
-        "h_last_mid_256",
-        "h_pool_mid_256",
-        "scalars_256"
-      ],
-      "path_csv": "probes/backend_llama/probe_xform/attn_layer2.csv",
-      "path_png": "probes/backend_llama/probe_xform/attn_layer2.png"
-    }
+    "attn_layer1",
+    "attn_layer2",
+    "attn_layer3"
   ]
 }
