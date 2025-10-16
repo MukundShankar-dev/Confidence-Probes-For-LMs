@@ -7,6 +7,7 @@ import argparse, json
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import pickle
 
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -382,7 +383,7 @@ def train_transformer_probe(
             lr_cal = LogisticRegression().fit(p_raw.reshape(-1, 1), yc)
             cal = lr_cal
             cal_type = "platt"
-        cal_blob = {"type": cal_type, "payload": joblib.dumps(cal)}
+        cal_blob = {"type": cal_type, "payload": pickle.dumps(cal)}
 
     if out_dir is not None:
         save = {
@@ -426,10 +427,10 @@ def xform_predict_proba(model_obj, X_df, use_hidden=True, cal_blob=None):
 
     # apply calibration if present
     if cal_blob is not None:
-        cal = joblib.loads(cal_blob["payload"])
+        cal = pickle.loads(cal_blob["payload"])
         if cal_blob["type"] == "platt":
             p = cal.predict_proba(p.reshape(-1, 1))[:, 1]
-        else:
+        else:  # isotonic
             p = cal.transform(p)
     return p
 
@@ -689,12 +690,12 @@ def main():
                         choices=["mlp", "logreg", "logreg_cal", "tree", "xform", "all"])
 
     # Transformer hyperparams / behavior
-    parser.add_argument("--xform_epochs", type=int, default=40)
+    parser.add_argument("--xform_epochs", type=int, default=60)
     parser.add_argument("--xform_lr", type=float, default=1e-3)
     parser.add_argument("--xform_wd", type=float, default=1e-4)
     parser.add_argument("--xform_heads", type=int, default=8)
-    parser.add_argument("--xform_layers", type=int, default=3)
-    parser.add_argument("--xform_ff", type=int, default=1024)
+    parser.add_argument("--xform_layers", type=int, default=4)
+    parser.add_argument("--xform_ff", type=int, default=1536)
     parser.add_argument("--xform_drop", type=float, default=0.1)
     parser.add_argument("--xform_stoch", type=float, default=0.05)
     parser.add_argument("--xform_calibrate", action="store_true")
