@@ -1,13 +1,12 @@
 # train_probe.py
-# Extended: multiple probe types (+plots), unified artifacts for easy eval.
-# Transformer probe upgraded with per-token projections, token-type embeddings, CLS pooling,
-# stochastic depth, optional calibration, and attention-map dumping.
+# Multi-probe trainer with plots and artifacts.
+# Transformer probe: per-token projections, token-type embeddings, CLS pooling,
+# stochastic depth, attention dumps, and SAFE calibration with debug plots.
 
-import argparse, json
+import argparse, json, pickle
 from pathlib import Path
 import numpy as np
 import pandas as pd
-import pickle
 
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -95,8 +94,8 @@ def build_df(rows, use_hidden=True, label_key="em"):
                     for j, v in enumerate(vec):
                         x[f"{name}_{j}"] = float(v)
                 else:
-                    for j in range(256):
-                        x[f"{name}_{j}"] = np.nan
+                    # leave missing; detect and drop for xform dynamically
+                    pass
         feats.append(x)
         labels.append(int(r.get(label_key, 0)))
         ids.append(r.get("idx", i))
@@ -192,23 +191,16 @@ class EncoderBlock(nn.Module):
 
 class TinyTransformerProbe(nn.Module):
     def __init__(self,
-                 use_hidden=True,
+                 n_tokens:int,   # dynamic!
                  d_model=256, nhead=8, num_layers=3, d_ff=1024,
                  p_drop=0.1, p_stoch=0.05):
         super().__init__()
-        self.use_hidden = use_hidden
         self.d_model = d_model
+        self.n_tokens = n_tokens  # includes scalar token, excludes CLS
 
-        # Per-token projections (put hidden/scalars on same footing)
-        if use_hidden:
-            self.proj_last     = nn.Sequential(nn.LayerNorm(256), nn.Linear(256, d_model))
-            self.proj_pool     = nn.Sequential(nn.LayerNorm(256), nn.Linear(256, d_model))
-            self.proj_last_mid = nn.Sequential(nn.LayerNorm(256), nn.Linear(256, d_model))
-            self.proj_pool_mid = nn.Sequential(nn.LayerNorm(256), nn.Linear(256, d_model))
-            n_tokens = 5
-        else:
-            n_tokens = 1
-
+        # per-token projections
+        self.hidden_projs = nn.ModuleList([nn.Sequential(nn.LayerNorm(256), nn.Linear(256, d_model))
+                                           for _ in range(max(0, n_tokens-1))])
         self.scalar_proj = nn.Sequential(nn.LayerNorm(13), nn.Linear(13, d_model))
 
         self.token_type = nn.Embedding(n_tokens, d_model)
@@ -228,111 +220,149 @@ class TinyTransformerProbe(nn.Module):
             nn.Sigmoid()
         )
 
-    def _project_tokens(self, tokens_256):
+    def forward(self, tokens_256, token_mask, return_attn=False):
         """
-        tokens_256 order (when use_hidden=True):
-        [h_last_256, h_pool_256, h_last_mid_256, h_pool_mid_256, scalars_256(padded)]
-        else: [scalars_256(padded)]
+        tokens_256: [B, T, D], where T = #present_hidden_tokens + 1 (scalar at end)
+        token_mask: [T] bool tensor: True for hidden pack positions, False for scalar (last).
         """
+        if token_mask.dim() != 1:
+            token_mask = token_mask.view(-1)
         B, T, D = tokens_256.shape
-        tok_list = []
-        idx = 0
-        if self.use_hidden:
-            tok_list.append(self.proj_last(tokens_256[:, idx, :]));     idx += 1
-            tok_list.append(self.proj_pool(tokens_256[:, idx, :]));     idx += 1
-            tok_list.append(self.proj_last_mid(tokens_256[:, idx, :])); idx += 1
-            tok_list.append(self.proj_pool_mid(tokens_256[:, idx, :])); idx += 1
-        scal_raw = tokens_256[:, -1, :13]
-        tok_list.append(self.scalar_proj(scal_raw))
-        x = torch.stack(tok_list, dim=1)  # [B,T',d_model]
-        return x
+        assert token_mask.numel() == T, "token_mask length must equal sequence length T"
 
-    def forward(self, tokens_256, return_attn=False):
-        x = self._project_tokens(tokens_256)            # [B,T',D]
-        B, T, D = x.shape
+        tok_list = []
+        hid_idx = 0
+        for t in range(T):
+            if token_mask[t]:  # hidden pack
+                tok_list.append(self.hidden_projs[hid_idx](tokens_256[:, t, :]))
+                hid_idx += 1
+            else:  # scalar (assumed last position)
+                scal_raw = tokens_256[:, t, :13]
+                tok_list.append(self.scalar_proj(scal_raw))
+        x = torch.stack(tok_list, dim=1)  # [B,T,d_model]
+
+        # add token-type embeddings (0..T-1)
         tt = torch.arange(T, device=x.device)
         x = x + self.token_type(tt)
 
         # prepend CLS
         cls = self.cls.expand(B, 1, -1)
-        x = torch.cat([cls, x], dim=1)                 # [B,T'+1,D]
+        x = torch.cat([cls, x], dim=1)  # [B,T+1,D]
         x = self.pos_drop(x)
 
         attn_list = [] if return_attn else None
         for layer in self.encoders:
             x, attn = layer(x, need_attn=return_attn)
             if return_attn:
-                attn_list.append(attn)  # [B,H,T+1,T+1]
-        pooled = x[:, 0, :]                             # CLS
+                attn_list.append(attn)
+        pooled = x[:, 0, :]  # CLS
         p = self.head(pooled).squeeze(-1)
         return (p, attn_list) if return_attn else p
 
-# Build transformer tokens from DataFrame
+# Build transformer tokens from DataFrame (DYNAMIC token presence)
 def build_transformer_tokens(X_df: pd.DataFrame, use_hidden: bool):
-    scalars = X_df[SCALAR_KEYS].fillna(0.0).to_numpy(dtype=np.float32)
+    """
+    Returns: tokens [B,T,256], token_mask [T] (True if hidden pack, False if scalar),
+             and token_labels list for debugging/attention.
+    Include a token only if all its 256 cols exist; otherwise omit it.
+    """
+    B = len(X_df)
     tokens = []
+    labels = []
+    mask = []
 
     if use_hidden:
         for name in VECTOR_KEYS:
             cols = [f"{name}_{i}" for i in range(256)]
-            if not set(cols).issubset(set(X_df.columns)):
-                mat = np.zeros((len(X_df), 256), dtype=np.float32)
-            else:
+            if set(cols).issubset(X_df.columns):
                 mat = X_df[cols].fillna(0.0).to_numpy(dtype=np.float32)
-            tokens.append(mat.astype(np.float32))
+                tokens.append(mat)
+                labels.append(name)
+                mask.append(True)
+            # else: skip silently
 
-    # scalar token: pad to 256 for uniform shape (projection happens in the model)
-    pad_to = 256
+    # scalars as final token, pad to 256
+    scalars = X_df[SCALAR_KEYS].fillna(0.0).to_numpy(dtype=np.float32)
     scal_tok = scalars
-    if scal_tok.shape[1] < pad_to:
-        scal_tok = np.pad(scal_tok, ((0, 0), (0, pad_to - scal_tok.shape[1])), 'constant')
-    elif scal_tok.shape[1] > pad_to:
-        scal_tok = scal_tok[:, :pad_to]
+    if scal_tok.shape[1] < 256:
+        scal_tok = np.pad(scal_tok, ((0,0),(0,256-scal_tok.shape[1])), 'constant')
+    elif scal_tok.shape[1] > 256:
+        scal_tok = scal_tok[:, :256]
     tokens.append(scal_tok.astype(np.float32))
+    labels.append("scalars_256")
+    mask.append(False)
 
-    out = np.stack(tokens, axis=1)  # [B,T,D]
-    return out
+    out = np.stack(tokens, axis=1)  # [B,T,256]
+    return out, np.array(mask, dtype=bool), labels
+
+def _reliability(ax, y_true, p, bins=10):
+    edges = np.linspace(0, 1, bins+1)
+    idx = np.digitize(p, edges) - 1
+    idx = np.clip(idx, 0, bins-1)
+    acc = []
+    conf = []
+    for b in range(bins):
+        m = idx == b
+        if m.any():
+            acc.append(np.mean(y_true[m]))
+            conf.append(np.mean(p[m]))
+        else:
+            acc.append(np.nan); conf.append((edges[b]+edges[b+1])/2)
+    ax.plot(conf, acc, marker='o')
+    ax.plot([0,1],[0,1],'--')
+    ax.set_xlabel('Confidence'); ax.set_ylabel('Empirical accuracy'); ax.set_title('Reliability')
 
 def train_transformer_probe(
     X_train_df, y_train,
     X_val_df=None, y_val=None,
     use_hidden=True, epochs=40, batch_size=256, lr=1e-3, weight_decay=1e-4,
     d_model=256, nhead=8, num_layers=3, d_ff=1024, p_drop=0.1, p_stoch=0.05,
-    device=None, out_dir=None, calibrate=True, patience=5
+    device=None, out_dir=None, calibrate=False, patience=5,
+    min_iso_samples=2000, min_platt_samples=400, cal_debug=False
 ):
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    X_train_tok = build_transformer_tokens(X_train_df, use_hidden)
+
+    X_train_tok, train_mask_np, train_labels = build_transformer_tokens(X_train_df, use_hidden)
     y_train_t = torch.tensor(y_train, dtype=torch.float32)
+    n_tokens = X_train_tok.shape[1]
+    train_mask_t = torch.tensor(train_mask_np, dtype=torch.bool).to(device)
 
     if X_val_df is not None and y_val is not None:
-        X_val_tok = build_transformer_tokens(X_val_df, use_hidden)
-        y_val_t = torch.tensor(y_val, dtype=torch.float32)
+        X_val_tok, val_mask_np, val_labels = build_transformer_tokens(X_val_df, use_hidden)
+        val_mask_t = torch.tensor(val_mask_np, dtype=torch.bool).to(device)
     else:
-        X_val_tok, y_val_t = None, None
+        X_val_tok, val_mask_np, val_mask_t, val_labels = None, None, None, None
+
+    # Sanity: masks between train/val must match if we calibrate
+    if calibrate and (X_val_tok is not None):
+        if not np.array_equal(train_mask_np, val_mask_np):
+            print("[WARN] Token set differs between train and val; skipping calibration for safety.")
+            calibrate = False
 
     model = TinyTransformerProbe(
-        use_hidden=use_hidden, d_model=d_model, nhead=nhead, num_layers=num_layers,
+        n_tokens=n_tokens, d_model=d_model, nhead=nhead, num_layers=num_layers,
         d_ff=d_ff, p_drop=p_drop, p_stoch=p_stoch
     ).to(device)
+
+    # Datasets WITHOUT mask (mask is sequence-level, reused for all batches)
+    train_ds = td.TensorDataset(torch.tensor(X_train_tok), y_train_t)
+    train_ld = td.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0)
+    if X_val_tok is not None:
+        val_ds = td.TensorDataset(torch.tensor(X_val_tok), torch.tensor(y_val, dtype=torch.float32))
+        val_ld = td.DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=0)
+    else:
+        val_ld = None
 
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, epochs))
     loss_fn = nn.MSELoss()
-
-    train_ds = td.TensorDataset(torch.tensor(X_train_tok), y_train_t)
-    train_ld = td.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0)
-    if X_val_tok is not None:
-        val_ds = td.TensorDataset(torch.tensor(X_val_tok), y_val_t)
-        val_ld = td.DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=0)
-    else:
-        val_ld = None
 
     best = {"brier": float("inf"), "state_dict": None, "patience": patience}
     for ep in range(1, epochs + 1):
         model.train()
         for xb, yb in train_ld:
             xb, yb = xb.to(device), yb.to(device)
-            p = model(xb)
+            p = model(xb, train_mask_t)
             loss = loss_fn(p, yb)
             opt.zero_grad()
             loss.backward()
@@ -346,7 +376,7 @@ def train_transformer_probe(
                 preds, ys = [], []
                 for xb, yb in val_ld:
                     xb = xb.to(device)
-                    p = model(xb).cpu().numpy()
+                    p = model(xb, val_mask_t).cpu().numpy()
                     preds.append(p); ys.append(yb.numpy())
                 p = np.concatenate(preds); yv = np.concatenate(ys)
                 brier = float(np.mean((p - yv) ** 2))
@@ -363,28 +393,58 @@ def train_transformer_probe(
         model.load_state_dict(best["state_dict"])
     model.eval()
 
-    # Optional calibration (isotonic if enough val; fallback to Platt)
+    # ----- Calibration (safe) -----
     cal_blob = None
     if calibrate:
-        # choose validation if available; else small slice of train
+        # choose validation if available; else a slice of train
         if X_val_tok is not None:
-            Xc, yc = X_val_tok, y_val
+            Xc, mc_t, yc = X_val_tok, val_mask_t, y_val
         else:
             n = min(4096, len(X_train_tok))
-            Xc = X_train_tok[:n]
-            yc = y_train[:n]
+            Xc, mc_t, yc = X_train_tok[:n], train_mask_t, y_train[:n]
+
         with torch.no_grad():
-            p_raw = model(torch.tensor(Xc).to(device)).cpu().numpy()
-        if len(p_raw) >= 2000:
+            p_raw = model(torch.tensor(Xc).to(device), mc_t).cpu().numpy()
+
+        n_c = len(p_raw)
+        if n_c >= min_iso_samples:
             cal = IsotonicRegression(out_of_bounds="clip").fit(p_raw, yc)
             cal_type = "isotonic"
-            # store fitted y_ boundaries too
-        else:
+        elif n_c >= min_platt_samples:
             lr_cal = LogisticRegression().fit(p_raw.reshape(-1, 1), yc)
             cal = lr_cal
             cal_type = "platt"
-        cal_blob = {"type": cal_type, "payload": pickle.dumps(cal)}
+        else:
+            print(f"[WARN] Not enough samples for calibration (n={n_c}). Skipping.")
+            cal = None
+            cal_type = None
 
+        if cal is not None:
+            cal_blob = {"type": cal_type, "payload": pickle.dumps(cal)}
+
+        # Optional debug plots
+        if cal_debug:
+            try:
+                fig, axs = plt.subplots(1, 3, figsize=(12, 3.2))
+                axs[0].hist(p_raw, bins=30); axs[0].set_title("Pre-calib prob hist"); axs[0].set_xlabel("p")
+                if cal is not None:
+                    if cal_type == "platt":
+                        p_post = cal.predict_proba(p_raw.reshape(-1,1))[:,1]
+                    else:
+                        p_post = cal.transform(p_raw)
+                else:
+                    p_post = p_raw
+                axs[1].hist(p_post, bins=30); axs[1].set_title("Post-calib prob hist"); axs[1].set_xlabel("p")
+                _reliability(axs[2], yc, p_post, bins=10)
+                fig.tight_layout()
+                if out_dir is not None:
+                    (out_dir / "calib_debug").mkdir(exist_ok=True)
+                    fig.savefig(out_dir / "calib_debug" / "calibration_debug.png", dpi=150)
+                plt.close(fig)
+            except Exception as e:
+                print(f"[WARN] Failed to save calibration debug plots: {e}")
+
+    # Save artifact
     if out_dir is not None:
         save = {
             "type": "xform",
@@ -395,19 +455,42 @@ def train_transformer_probe(
                 "d_model": d_model, "nhead": nhead, "num_layers": num_layers,
                 "d_ff": d_ff, "p_drop": p_drop, "p_stoch": p_stoch
             },
-            "scalar_keys": SCALAR_KEYS,
-            "vector_keys": VECTOR_KEYS if use_hidden else [],
-            "packed_dim": 256
+            "token_labels": (train_labels if 'train_labels' in locals() else []),
+            "packed_dim": 256,
+            "train_mask": train_mask_np.tolist()
         }
         torch.save(save, out_dir / "probe_model.pt")
-    return model, cal_blob
+    return model, cal_blob, train_mask_np
 
-def xform_predict_proba(model_obj, X_df, use_hidden=True, cal_blob=None):
+def xform_predict_proba(model_obj, X_df, use_hidden=True, cal_blob=None, train_mask=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Build tokens for this split
+    X_tok, mask_np, _ = build_transformer_tokens(X_df, use_hidden)
+    mask_t = torch.tensor(mask_np, dtype=torch.bool).to(device)
+
+    # If a reference train_mask is provided, enforce same token order by intersection
+    if train_mask is not None:
+        train_mask_np = np.array(train_mask, dtype=bool)
+        if not np.array_equal(train_mask_np, mask_np):
+            tr_idx = np.where(train_mask_np)[0].tolist()
+            te_idx = np.where(mask_np)[0].tolist()
+            common = [i for i in tr_idx if i in te_idx]
+            # include scalar token (last position) if present on both
+            if (len(train_mask_np) > 0 and not train_mask_np[-1]) and (len(mask_np) > 0 and not mask_np[-1]):
+                common += [X_tok.shape[1]-1]
+            if len(common) < 1:
+                raise RuntimeError("Token mismatch between train and inference masks; no common tokens.")
+            X_tok = X_tok[:, common, :]
+            mask_np = mask_np[common]
+            mask_t = torch.tensor(mask_np, dtype=torch.bool).to(device)
+
+    # Rebuild model from blob if dict provided
     if isinstance(model_obj, dict):
         arch = model_obj.get("arch", {})
+        n_tokens = X_tok.shape[1]
         model = TinyTransformerProbe(
-            use_hidden=use_hidden,
+            n_tokens=n_tokens,
             d_model=arch.get("d_model", 256),
             nhead=arch.get("nhead", 8),
             num_layers=arch.get("num_layers", 3),
@@ -419,38 +502,49 @@ def xform_predict_proba(model_obj, X_df, use_hidden=True, cal_blob=None):
         cal_blob = model_obj.get("calibration", cal_blob)
     else:
         model = model_obj.to(device)
-    model.eval()
 
-    X_tok = build_transformer_tokens(X_df, use_hidden)
+    model.eval()
     with torch.no_grad():
-        p = model(torch.tensor(X_tok).to(device)).cpu().numpy()
+        p = model(torch.tensor(X_tok).to(device), mask_t).cpu().numpy()
 
     # apply calibration if present
     if cal_blob is not None:
         cal = pickle.loads(cal_blob["payload"])
         if cal_blob["type"] == "platt":
             p = cal.predict_proba(p.reshape(-1, 1))[:, 1]
-        else:  # isotonic
+        else:
             p = cal.transform(p)
     return p
 
 # ---- Attention dumping for Transformer probe ----
 
-def dump_attention_maps(model_obj, X_df, use_hidden, out_dir: Path, max_batches=8, batch_size=256):
-    """
-    Computes averaged attention matrices per encoder layer across a subset
-    of the provided split. Saves:
-      - attn_layer{k}.npy  (T x T averaged)
-      - attn_layer{k}.csv  (token x token)
-      - attn_layer{k}.png  (heatmap)
-      - attn_summary.json  (token labels + notes)
-    """
+def dump_attention_maps(model_obj, X_df, use_hidden, out_dir: Path, max_batches=8, batch_size=256, train_mask=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    X_tok, mask_np, labels = build_transformer_tokens(X_df, use_hidden)
+
+    # Align to train_mask if provided
+    if train_mask is not None:
+        train_mask_np = np.array(train_mask, dtype=bool)
+        if not np.array_equal(train_mask_np, mask_np):
+            tr_idx = np.where(train_mask_np)[0].tolist()
+            te_idx = np.where(mask_np)[0].tolist()
+            common = [i for i in tr_idx if i in te_idx]
+            if (len(train_mask_np) > 0 and not train_mask_np[-1]) and (len(mask_np) > 0 and not mask_np[-1]):
+                common += [X_tok.shape[1]-1]
+            if len(common) < 1:
+                print("[WARN] Attention dump: token mismatch; skipping.")
+                return
+            X_tok = X_tok[:, common, :]
+            mask_np = mask_np[common]
+            labels = [labels[i] for i in common]
+
+    mask_t = torch.tensor(mask_np, dtype=torch.bool).to(device)
 
     if isinstance(model_obj, dict):
         arch = model_obj.get("arch", {})
         model = TinyTransformerProbe(
-            use_hidden=use_hidden,
+            n_tokens=X_tok.shape[1],
             d_model=arch.get("d_model", 256),
             nhead=arch.get("nhead", 8),
             num_layers=arch.get("num_layers", 3),
@@ -463,13 +557,10 @@ def dump_attention_maps(model_obj, X_df, use_hidden, out_dir: Path, max_batches=
         model = model_obj.to(device)
     model.eval()
 
-    X_tok = build_transformer_tokens(X_df, use_hidden)
     ds = td.TensorDataset(torch.tensor(X_tok))
     ld = td.DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
 
-    tok_labels = (["CLS"] +
-                  (VECTOR_KEYS if use_hidden else []) +
-                  ["scalars_256"])
+    tok_labels = ["CLS"] + labels
     T = len(tok_labels)
 
     with torch.no_grad():
@@ -478,9 +569,7 @@ def dump_attention_maps(model_obj, X_df, use_hidden, out_dir: Path, max_batches=
         batches_done = 0
         for (xb,) in ld:
             xb = xb.to(device)
-            # forward with attention
-            # model.forward handles projections, token-type emb, and CLS
-            _, attn_list = model(xb, return_attn=True)  # list of [B,H,T,T]
+            _, attn_list = model(xb, mask_t, return_attn=True)
             for li, attn in enumerate(attn_list):
                 a = attn.mean(dim=1).mean(dim=0).detach().cpu().numpy()  # [T,T]
                 acc[li] += a
@@ -495,7 +584,7 @@ def dump_attention_maps(model_obj, X_df, use_hidden, out_dir: Path, max_batches=
             np.save(out_dir / f"attn_layer{li+1}.npy", avg_norm)
             pd.DataFrame(avg_norm, index=tok_labels, columns=tok_labels).to_csv(out_dir / f"attn_layer{li+1}.csv")
 
-            plt.figure(figsize=(4.6, 3.6))
+            plt.figure(figsize=(4.8, 3.8))
             plt.imshow(avg_norm, aspect="equal")
             plt.colorbar()
             plt.xticks(range(T), tok_labels, rotation=45, ha="right")
@@ -560,7 +649,8 @@ def fit_and_eval_probe(probe_type: str, X_tr, y_tr, X_va, y_va, X_te, y_te,
                        xform_epochs=40, xform_dump_attn=False, xform_attn_split="val",
                        xform_attn_batches=8, xform_lr=1e-3, xform_wd=1e-4,
                        xform_heads=8, xform_layers=3, xform_ff=1024, xform_drop=0.1, xform_stoch=0.05,
-                       xform_calibrate=True, xform_patience=5):
+                       xform_calibrate=False, xform_patience=5,
+                       xform_min_iso=2000, xform_min_platt=400, xform_cal_debug=False):
     """
     Trains one probe type, writes artifacts under out_root / probe_<type>/
     """
@@ -593,13 +683,15 @@ def fit_and_eval_probe(probe_type: str, X_tr, y_tr, X_va, y_va, X_te, y_te,
         predict_proba = lambda X: model.predict_proba(X.values)[:, 1]
 
     elif probe_type == "xform":
-        model, cal_blob = train_transformer_probe(
+        model, cal_blob, train_mask_np = train_transformer_probe(
             X_tr, y_tr, X_va, y_va,
             use_hidden=use_hidden,
             epochs=xform_epochs, lr=xform_lr, weight_decay=xform_wd,
             nhead=xform_heads, num_layers=xform_layers, d_ff=xform_ff,
             p_drop=xform_drop, p_stoch=xform_stoch,
-            out_dir=probe_dir, calibrate=xform_calibrate, patience=xform_patience
+            out_dir=probe_dir, calibrate=xform_calibrate, patience=xform_patience,
+            min_iso_samples=xform_min_iso, min_platt_samples=xform_min_platt,
+            cal_debug=xform_cal_debug
         )
         saver = lambda: torch.save({
             "type": "xform",
@@ -608,11 +700,11 @@ def fit_and_eval_probe(probe_type: str, X_tr, y_tr, X_va, y_va, X_te, y_te,
             "calibration": cal_blob,
             "arch": {"d_model": 256, "nhead": xform_heads, "num_layers": xform_layers,
                      "d_ff": xform_ff, "p_drop": xform_drop, "p_stoch": xform_stoch},
-            "scalar_keys": SCALAR_KEYS,
-            "vector_keys": VECTOR_KEYS if use_hidden else [],
-            "packed_dim": 256
+            "train_mask": train_mask_np.tolist()
         }, probe_dir / "probe_model.pt")
-        predict_proba = lambda X: xform_predict_proba(model, X, use_hidden=use_hidden, cal_blob=cal_blob)
+        predict_proba = lambda X: xform_predict_proba(
+            model, X, use_hidden=use_hidden, cal_blob=cal_blob, train_mask=train_mask_np
+        )
 
         # Optional: dump attention maps
         if xform_dump_attn:
@@ -623,7 +715,7 @@ def fit_and_eval_probe(probe_type: str, X_tr, y_tr, X_va, y_va, X_te, y_te,
             else:
                 X_for_attn = X_tr.head(min(4096, len(X_tr)))
             dump_attention_maps(model, X_for_attn, use_hidden, probe_dir,
-                                max_batches=xform_attn_batches)
+                                max_batches=xform_attn_batches, train_mask=train_mask_np)
 
     else:
         raise ValueError(f"Unknown probe_type: {probe_type}")
@@ -690,16 +782,22 @@ def main():
                         choices=["mlp", "logreg", "logreg_cal", "tree", "xform", "all"])
 
     # Transformer hyperparams / behavior
-    parser.add_argument("--xform_epochs", type=int, default=60)
+    parser.add_argument("--xform_epochs", type=int, default=40)
     parser.add_argument("--xform_lr", type=float, default=1e-3)
     parser.add_argument("--xform_wd", type=float, default=1e-4)
     parser.add_argument("--xform_heads", type=int, default=8)
-    parser.add_argument("--xform_layers", type=int, default=4)
-    parser.add_argument("--xform_ff", type=int, default=1536)
+    parser.add_argument("--xform_layers", type=int, default=3)
+    parser.add_argument("--xform_ff", type=int, default=1024)
     parser.add_argument("--xform_drop", type=float, default=0.1)
     parser.add_argument("--xform_stoch", type=float, default=0.05)
     parser.add_argument("--xform_calibrate", action="store_true")
     parser.add_argument("--xform_patience", type=int, default=5)
+    parser.add_argument("--xform_min_iso", type=int, default=2000,
+                        help="min samples to use isotonic calibration; else try Platt; else skip")
+    parser.add_argument("--xform_min_platt", type=int, default=400,
+                        help="min samples to use Platt calibration; else skip")
+    parser.add_argument("--xform_cal_debug", action="store_true",
+                        help="save calibration histograms + reliability diagram")
 
     # Attention export toggles
     parser.add_argument("--xform_dump_attn", action="store_true",
@@ -776,6 +874,9 @@ def main():
                 xform_stoch=args.xform_stoch,
                 xform_calibrate=args.xform_calibrate,
                 xform_patience=args.xform_patience,
+                xform_min_iso=args.xform_min_iso,
+                xform_min_platt=args.xform_min_platt,
+                xform_cal_debug=args.xform_cal_debug
             )
             print(f"[OK] Saved {pt} to {result['probe_dir']}")
             for r in result["splits"]:

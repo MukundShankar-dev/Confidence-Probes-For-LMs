@@ -1,538 +1,599 @@
-#!/usr/bin/env python3
-"""
-demo.py — Ask a question, run the LM, build *the exact same features* as in data collection,
-load the trained per-backend probe, and print the model JSON + probe P(correct).
+# scripts/demo.py
+# Interactive demo: ask a trivia question, run an LM, parse self-reported confidence,
+# compute probe features, and score P(correct) with a trained probe.
+#
+# Usage:
+#   python -m scripts.demo --model llama31 --probe_dir probes/backend_llama/probe_mlp --use_hidden
+#   python -m scripts.demo --model qwen    --probe_dir probes/backend_qwen/probe_xform --use_hidden
+#
+# Notes:
+# - Pass the *exact* directory for a single trained probe (e.g., probes/backend_llama/probe_mlp).
+#   The script will auto-detect whether it's a sklearn/joblib probe or a Transformer (.pt) probe.
+# - It will also read feature_names.json in that directory to align feature columns.
+# - If available, it will import your local `scripts.collect_internals` module to compute the
+#   same statistics/features you used for training. If not available, it falls back to a built-in
+#   minimal featurizer (works but may not match training exactly).
 
-Key point: This reproduces the feature pipeline from collect_internals.py so the probe
-sees the same statistics (generation-time token stats, teacher-forced hidden states,
-and canonical JSON rescoring).
-
-Usage:
-  python -m scripts.demo --model llama31 --probes_dir probes/
-  python -m scripts.demo --model qwen    --probes_dir probes/
-Options:
-  --max_new_tokens 64
-  --use_hidden                 (compute 4×256 hidden-state packs; slower)
-  --model_id <HF id>           (override default HF model id)
-"""
-
-import argparse, json, math, os, sys, time, re
+import argparse
+import json
+import os
+import re
+import sys
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
-
+from dataclasses import dataclass
 import numpy as np
+import pandas as pd
+
+# ---------------- LM loading ----------------
 import torch
-import torch.nn.functional as F
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+# ---------------- Probes ----------------
 import joblib
+import pickle
 
-# ----------------------------- Config -----------------------------
+# ---------------- Pretty print ----------------
+from textwrap import indent
 
-MODEL_MAP = {
-    "llama31": "meta-llama/Meta-Llama-3.1-8B-Instruct",
-    "qwen":    "Qwen/Qwen2.5-7B-Instruct",
-}
-BACKEND_KEY = {"llama31": "llama", "qwen": "qwen"}
+# ===========================
+# Prompt & parsing utilities
+# ===========================
 
-# Enforce the very same few-shot style used during data collection (note the double braces)
-FEWSHOT_FIXED_FINAL_ONLY_DEFAULT = """You are answering trivia questions.
+FEWSHOT_FIXED_ANSWERABLE = """You are answering trivia questions.
 Return only a single JSON object with fields:
-- "answer": the short factual span (1–5 words, no punctuation)
-- "p_true": the probability (0.0–1.0) that this answer is correct (round to two decimals)
+- "answer": the short factual span (1–5 words, no punctuation). Do NOT output "Unknown" for this dataset; instead provide your best answer span.
+- "p_true": the probability (0.0–1.0) that this answer is correct (round to two decimals).
 
 Calibration guidance:
 - Report your true probability; do NOT inflate.
-- Overconfidence is penalized by proper scoring (Brier). If unsure, choose a lower value.
+- If you are unsure, still provide your best span answer and set a lower p_true (e.g., 0.15–0.35).
 - If multiple plausible answers exist or the question is ambiguous, reduce p_true appropriately.
 
+Return exactly ONE JSON object and NOTHING else.
+
 Q: Who wrote Hamlet?
-{{"answer": "William Shakespeare", "p_true": 0.95}}
+{"answer": "William Shakespeare", "p_true": 0.95}
 
 Q: What is the capital of France?
-{{"answer": "Paris", "p_true": 0.92}}
+{"answer": "Paris", "p_true": 0.92}
 
 Q: What is the capital of South Africa?
-{{"answer": "Pretoria", "p_true": 0.60}}
+{"answer": "Pretoria", "p_true": 0.60}
 
 Q: Which element has the symbol 'Au'?
-{{"answer": "Aluminum", "p_true": 0.15}}
-
-Q: Who authored the Voynich Manuscript?
-{{"answer": "Unknown", "p_true": 0.20}}
+{"answer": "Aluminum", "p_true": 0.15}
 
 Q: Which planet is known as the Red Planet?
-{{"answer": "Mars", "p_true": 0.85}}
+{"answer": "Mars", "p_true": 0.85}
 
 Q: {EVAL_QUESTION}
 """
 
-def build_prompt(q: str) -> str:
-    return FEWSHOT_FIXED_FINAL_ONLY_DEFAULT.format(EVAL_QUESTION=q)
+# Strict-ish JSON grab: take first {...} block that parses
+FIRST_JSON_RE = re.compile(r"\{[^{}]*\}")
 
-# ----------------------------- JSON parsing (same tolerance) -----------------------------
-
-_JSON_WARN_ONCE = False
-
-def safe_json_extract(text: str):
-    """Best-effort JSON extractor consistent with data collection."""
-    global _JSON_WARN_ONCE
-    t = text.strip()
-
-    # strip code fences
-    if t.startswith("```"):
-        t = t.lstrip("`")
-        if "\n" in t:
-            t = t.split("\n", 1)[1].strip()
-        if t.endswith("```"):
-            t = t[:-3].strip()
-
-    # un-escape if double-escaped
-    try:
-        if "\\\"" in t or "\\\\\"" in t:
-            t_try = bytes(t, "utf-8").decode("unicode_escape")
-            if "{" in t_try and "}" in t_try:
-                t = t_try
-    except Exception:
-        pass
-
-    start, end = t.find("{"), t.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        candidate = t[start:end + 1]
+def extract_first_json(text: str):
+    """
+    Extract and parse the first JSON object in the text. Returns (obj_or_none, raw_fragment_or_none)
+    """
+    for m in FIRST_JSON_RE.finditer(text):
+        frag = m.group(0)
         try:
-            return json.loads(candidate)
-        except Exception as e:
-            if not _JSON_WARN_ONCE:
-                print(f"[warn] JSON parse failed: {e}\nraw: {t[:200]}", file=sys.stderr)
-                _JSON_WARN_ONCE = True
-    return None
+            obj = json.loads(frag)
+            return obj, frag
+        except Exception:
+            continue
+    return None, None
 
-def extract_answer_and_prob(text: str):
-    """Parse {"answer": ..., "p_true": ...}. Returns (answer_text, p_model or None)."""
-    obj = safe_json_extract(text)
-    if isinstance(obj, dict):
-        norm = {str(k).strip().lower(): v for k, v in obj.items()}
-        ans = (norm.get("answer") or norm.get("final") or norm.get("prediction") or "").strip()
-        p = None
-        for key in ["p_true", "confidence", "conf", "prob", "probability", "信心", "confidence_score", "confidence_level"]:
-            if key in norm:
-                try:
-                    p = float(norm[key])
-                except Exception:
-                    try:
-                        p = float(str(norm[key]).replace("%", "")) / 100.0
-                    except Exception:
-                        pass
-                break
-        if p is not None:
-            p = float(max(0.0, min(1.0, p if p <= 1.0 else p/100.0)))
-        return ans, p
-    return text.strip(), None
+def normalize_answer_span(s: str) -> str:
+    s = (s or "").strip()
+    s = re.sub(r"[^\w\s'-]", "", s)
+    s = re.sub(r"\s+", " ", s)
+    return s
 
-# ----------------------------- Stats identical to training -----------------------------
+# ===========================
+# LM backends
+# ===========================
 
-def token_logprobs_for_targets(logits, target_ids):
-    logps = []
-    for logit_step, tok_id in zip(logits, target_ids):
-        lsm = torch.log_softmax(logit_step[0].float(), dim=-1)
-        logps.append(float(lsm[int(tok_id)].item()))
-    return logps
+LLAMA_ID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+QWEN_ID  = "Qwen/Qwen2.5-7B-Instruct"
 
-def compute_generation_stats(gen_scores: List[torch.Tensor], gen_ids_seq: List[int]) -> Dict[str, float]:
-    """
-    Mirror feature construction from collect_internals:
-    - Use all T steps from generation scores
-    - Compute entropy & margins per step
-    - Compute per-step log-prob for the chosen token
-    - For mean/std/min aggregates, exclude the final step (content_len = max(1, T-1))
-    """
-    T = len(gen_scores)
-    content_len = max(1, T - 1) if T > 1 else T
-
-    step_ent, margins, step_logp = [], [], []
-    for t in range(T):
-        logits = gen_scores[t][0].float()
-        top2 = torch.topk(logits, k=2).values
-        margins.append(float(top2[0] - top2[1]))
-
-        probs = torch.softmax(logits, dim=-1)
-        ent = float(-(probs * torch.log(probs.clamp_min(1e-12))).sum().item())
-        step_ent.append(ent)
-
-        tok_id = gen_ids_seq[t] if t < len(gen_ids_seq) else None
-        if tok_id is not None:
-            lsm = torch.log_softmax(logits, dim=-1)
-            step_logp.append(float(lsm[tok_id].item()))
-
-    entropy_mean = float(sum(step_ent[:content_len]) / content_len) if step_ent else None
-    entropy_last = float(step_ent[-1]) if step_ent else None
-    entropy_std = float(torch.tensor(step_ent[:content_len]).std().item()) if len(step_ent[:content_len]) > 1 else None
-
-    margin_mean = float(sum(margins[:content_len]) / content_len) if margins else None
-    margin_last = float(margins[-1]) if margins else None
-    margin_min = float(min(margins[:content_len])) if content_len > 0 and margins else None
-
-    lp_mean = float(sum(step_logp[:content_len]) / content_len) if step_logp else None
-    seq_conf = math.exp(lp_mean) if lp_mean is not None else None
-
-    return {
-        "lp_mean": lp_mean,
-        "seq_conf": seq_conf,
-        "entropy_mean": entropy_mean,
-        "entropy_last": entropy_last,
-        "entropy_std": entropy_std,
-        "margin_mean": margin_mean,
-        "margin_last": margin_last,
-        "margin_min": margin_min,
-    }
-
-def rescore_mean_logprob(hf_causal_lm, tok, prompt_text: str, target_text: str):
-    """
-    Teacher-forced mean log-prob for the *canonical JSON* appended to the prompt.
-    """
-    with torch.no_grad():
-        enc_prompt = tok(prompt_text, add_special_tokens=False, return_tensors="pt")
-        enc_target = tok(target_text, add_special_tokens=False, return_tensors="pt")
-        input_ids = torch.cat([enc_prompt["input_ids"], enc_target["input_ids"]], dim=-1).to(hf_causal_lm.device)
-        attn = torch.ones_like(input_ids)
-        out = hf_causal_lm(input_ids=input_ids, attention_mask=attn, use_cache=False, return_dict=True)
-        logits = out.logits[:, :-1, :]  # next-token preds
-        target_slice = input_ids[:, enc_prompt["input_ids"].shape[-1]:]
-        logits_tgt = logits[:, -target_slice.shape[-1]:, :]
-        step_logps = []
-        for t in range(target_slice.shape[-1]):
-            lsm = torch.log_softmax(logits_tgt[0, t].float(), dim=-1)
-            step_logps.append(float(lsm[int(target_slice[0, t])].item()))
-        return sum(step_logps) / max(1, len(step_logps))
-
-def pack_256(vec: torch.Tensor):
-    """L2-normalize then take/pad to first 256 dims."""
-    if vec is None:
-        return None
-    v = torch.nn.functional.normalize(vec.float(), dim=-1)
-    if v.shape[-1] >= 256:
-        v = v[:256]
+def load_lm(which: str, device: str = None):
+    if which.lower() in ["llama31", "llama", "backend_llama"]:
+        model_id = LLAMA_ID
+    elif which.lower() in ["qwen", "backend_qwen"]:
+        model_id = QWEN_ID
     else:
-        v = torch.nn.functional.pad(v, (0, 256 - v.shape[-1]))
-    return [float(x) for x in v.detach().cpu()]
+        raise ValueError(f"Unknown --model {which}. Use llama31 or qwen.")
 
-# ----------------------------- Model adapters -----------------------------
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[LM] Loading {model_id} on {device} ...")
+    tok = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+        device_map="auto" if device == "cuda" else None,
+        trust_remote_code=True,
+    )
+    model.eval()
+    return tok, model, model_id
 
-def load_adapter(args):
-    """
-    Prefer the same wrappers used in data collection. If not importable, fall back
-    to a minimal HF adapter with similar generation settings.
-    """
-    # Try project's Llama31 adapter
-    if args.model == "llama31":
-        try:
-            from src.models.llama31_8b import Llama31_8B  # same as collection
-            mid = args.model_id or MODEL_MAP["llama31"]
-            return Llama31_8B(model_id=mid, dtype="float16", device_map=None, max_new_tokens=args.max_new_tokens)
-        except Exception as e:
-            print(f"[info] Could not import project adapter for llama31, falling back to HF: {e}", file=sys.stderr)
+# ===========================
+# Feature computation
+# ===========================
 
-    # Try project's Qwen adapter
-    if args.model == "qwen":
-        try:
-            from transformers import AutoTokenizer, AutoModelForCausalLM, StoppingCriteria, StoppingCriteriaList
-            class _StopOnStrings(torch.nn.Module):
-                def __init__(self, tok, stop_strings: List[str]):
-                    super().__init__()
-                    self.tok = tok
-                    self.stop_ids = [tok.encode(s, add_special_tokens=False) for s in stop_strings]
-                    self.start_len = None
-                def set_start_len(self, n): self.start_len = int(n)
-                def __call__(self, input_ids, scores, **kwargs):
-                    if self.start_len is None: return False
-                    seq = input_ids[0].tolist()
-                    for pat in self.stop_ids:
-                        L = len(pat)
-                        if L and len(seq) >= L and seq[-L:] == pat: return True
-                    return False
+# We’ll try to import your training-time featurizer.
+COLLECT = None
+try:
+    # Expecting something like scripts/collect_internals.py
+    from scripts.collect_internals import featurize_for_probe  # user-provided function (if exists)
+    COLLECT = "featurize_for_probe"
+except Exception:
+    pass
 
-            class QwenAdapter:
-                def __init__(self, model_id, dtype="float16", device_map=None, max_new_tokens=64, cache_dir=None):
-                    torch_dtype = getattr(torch, dtype)
-                    self.tok = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-                    self.model = AutoModelForCausalLM.from_pretrained(
-                        model_id, torch_dtype=torch_dtype, device_map=device_map,
-                        trust_remote_code=True, low_cpu_mem_usage=True, attn_implementation="sdpa"
-                    ).to("cuda").eval()
-                    if getattr(self.model.config, "pad_token_id", None) is None:
-                        self.model.config.pad_token_id = self.tok.eos_token_id
-                    self.max_new = int(max_new_tokens)
-                    self._stopper = _StopOnStrings(self.tok, ["\nQ:", " Q:", "\nUser:", "\nAssistant:"])
-
-                @torch.no_grad()
-                def generate_with_states(self, prompt: str):
-                    enc = self.tok(prompt, return_tensors="pt")
-                    enc = {k: v.to(self.model.device) for k, v in enc.items()}
-                    start = int(enc["input_ids"].shape[-1])
-                    self._stopper.set_start_len(start)
-                    gen = self.model.generate(
-                        **enc,
-                        max_new_tokens=self.max_new,
-                        do_sample=False,
-                        no_repeat_ngram_size=3,
-                        repetition_penalty=1.05,
-                        return_dict_in_generate=True,
-                        output_scores=True,
-                        output_hidden_states=False,
-                        pad_token_id=self.tok.eos_token_id,
-                        eos_token_id=self.tok.eos_token_id,
-                        use_cache=True,
-                        stopping_criteria=StoppingCriteriaList([self._stopper]),
-                        min_new_tokens=2,
-                    )
-                    return enc, gen
-                def split_channels(self, generated_ids: torch.Tensor):
-                    return "", self.tok.decode(generated_ids, skip_special_tokens=True).strip()
-
-            mid = args.model_id or MODEL_MAP["qwen"]
-            return QwenAdapter(mid, dtype="float16", device_map=None, max_new_tokens=args.max_new_tokens)
-        except Exception as e:
-            print(f"[info] Could not construct Qwen adapter, falling back to generic HF: {e}", file=sys.stderr)
-
-    # Generic HF fallback
-    from transformers import AutoTokenizer, AutoModelForCausalLM, StoppingCriteria, StoppingCriteriaList
-
-    class _StopOnStrings(StoppingCriteria):
-        def __init__(self, tok, stop_strings: List[str]):
-            self.tok = tok
-            self.stop_ids = [tok.encode(s, add_special_tokens=False) for s in stop_strings]
-            self.start_len = None
-        def set_start_len(self, n): self.start_len = int(n)
-        def __call__(self, input_ids, scores, **kwargs):
-            if self.start_len is None: return False
-            seq = input_ids[0].tolist()
-            for pat in self.stop_ids:
-                L = len(pat)
-                if L and len(seq) >= L and seq[-L:] == pat:
-                    return True
-            return False
-
-    class HFAdapter:
-        def __init__(self, model_id, dtype="float16", device_map=None, max_new_tokens=64):
-            torch_dtype = getattr(torch, dtype)
-            self.tok = AutoTokenizer.from_pretrained(model_id, use_fast=True, trust_remote_code=True)
-            self.model = AutoModelForCausalLM.from_pretrained(
-                model_id,
-                torch_dtype=torch_dtype,
-                device_map=device_map,
-                trust_remote_code=True,
-                low_cpu_mem_usage=True,
-                attn_implementation="sdpa",
-            ).to("cuda").eval()
-            if getattr(self.model.config, "pad_token_id", None) is None:
-                self.model.config.pad_token_id = self.tok.eos_token_id
-            self.max_new = int(max_new_tokens)
-            self._stopper = _StopOnStrings(self.tok, ["\nQ:", " Q:", "\nUser:", "\nAssistant:"])
-
-        @torch.no_grad()
-        def generate_with_states(self, prompt: str):
-            enc = self.tok(prompt, return_tensors="pt")
-            enc = {k: v.to(self.model.device) for k, v in enc.items()}
-            start = int(enc["input_ids"].shape[-1])
-            self._stopper.set_start_len(start)
-            gen = self.model.generate(
-                **enc,
-                max_new_tokens=self.max_new,
-                do_sample=False,
-                no_repeat_ngram_size=3,
-                repetition_penalty=1.05,
-                return_dict_in_generate=True,
-                output_scores=True,
-                output_hidden_states=False,
-                pad_token_id=self.tok.eos_token_id,
-                eos_token_id=self.tok.eos_token_id,
-                use_cache=True,
-                stopping_criteria=StoppingCriteriaList([self._stopper]),
-                min_new_tokens=2,
-            )
-            return enc, gen
-
-        def split_channels(self, generated_ids: torch.Tensor):
-            text = self.tok.decode(generated_ids, skip_special_tokens=True).strip()
-            return "", text
-
-    mid = args.model_id or MODEL_MAP.get(args.model, MODEL_MAP["llama31"])
-    return HFAdapter(mid, dtype="float16", device_map=None, max_new_tokens=args.max_new_tokens)
-
-# ----------------------------- Probe features -----------------------------
-
+# Fallback feature keys (must match training)
 SCALAR_KEYS = [
     "model_confidence", "lp_mean", "seq_conf",
-    "entropy_mean", "entropy_last", "entropy_std",
-    "margin_mean", "margin_last", "margin_min",
+    "entropy_mean", "entropy_std",
+    "margin_mean", "margin_min",
     "rescore_logp", "answer_len",
     "parsed_json_ok", "parsed_p_true_ok", "is_unknown",
 ]
-VECTOR_KEYS = ["h_last_256", "h_pool_256", "h_last_mid_256", "h_pool_mid_256"]
+VECTOR_KEYS = ["h_last_256", "h_pool_256", "h_last_mid_256", "h_pool_mid_256"]  # optional
 
-def to_1d_256(arr: Optional[List[float]]) -> Optional[np.ndarray]:
-    if arr is None: return None
-    a = np.asarray(arr, dtype=float).ravel()
-    if a.size < 256: a = np.pad(a, (0, 256 - a.size))
-    elif a.size > 256: a = a[:256]
-    return a
+@dataclass
+class DemoFeatures:
+    scalars: dict
+    vectors: dict  # name -> np.ndarray shape [256]
 
-def build_feature_row(record: Dict[str, Any], feat_names: List[str]) -> List[float]:
-    expanded = {}
-    # scalars
-    for k in SCALAR_KEYS:
-        v = record.get(k, np.nan)
-        if isinstance(v, float) and (math.isinf(v) or math.isnan(v)):
-            v = np.nan
-        expanded[k] = float(v) if v is not np.nan else np.nan
-    # vectors
-    for base in VECTOR_KEYS:
-        vec = to_1d_256(record.get(base))
-        if vec is None:
-            for i in range(256):
-                expanded[f"{base}_{i}"] = np.nan
+def safe_softmax(x):
+    x = x - np.max(x)
+    e = np.exp(x)
+    return e / np.sum(e)
+
+def basic_featurizer(tokenizer, model, prompt_ids, gen_ids, logits_per_step) -> DemoFeatures:
+    """
+    Very lightweight fallback featurizer.
+    - Uses logits to approximate per-token entropy, margins, etc.
+    - Does NOT compute real hidden-state packs; fills them with zeros.
+    - Matches scalar key names used in training (best effort).
+    """
+    # Compute per-step stats for the generated portion
+    # logits_per_step: list of np.array [Vocab]
+    entropies = []
+    margins = []
+    lp_tokens = []
+    for t, (logit) in enumerate(logits_per_step):
+        prob = safe_softmax(logit.astype(np.float64))
+        ent = -np.sum(prob * np.log(prob + 1e-12))
+        entropies.append(ent)
+        sortp = np.sort(prob)
+        margin = sortp[-1] - sortp[-2] if len(sortp) >= 2 else sortp[-1]
+        margins.append(margin)
+
+        tok_id = gen_ids[t]
+        lp_tokens.append(np.log(prob[tok_id] + 1e-12))
+
+    # Scalar aggregates
+    entropy_mean = float(np.mean(entropies)) if entropies else 0.0
+    entropy_std  = float(np.std(entropies)) if entropies else 0.0
+    margin_mean  = float(np.mean(margins)) if margins else 0.0
+    margin_min   = float(np.min(margins)) if margins else 0.0
+    lp_mean      = float(np.mean(lp_tokens)) if lp_tokens else 0.0
+    seq_conf     = float(np.exp(np.sum(lp_tokens))) if lp_tokens else 0.0  # uncalibrated pseudo-conf
+    rescore_logp = float(np.sum(lp_tokens)) if lp_tokens else 0.0
+
+    # "model_confidence" here is a placeholder; we’ll set it to parsed p_true if present
+    scalars = {
+        "model_confidence": 0.0,  # will set from parsed JSON if available
+        "lp_mean": lp_mean,
+        "seq_conf": seq_conf,
+        "entropy_mean": entropy_mean,
+        "entropy_std": entropy_std,
+        "margin_mean": margin_mean,
+        "margin_min": margin_min,
+        "rescore_logp": rescore_logp,
+        "answer_len": 0,  # will set after parsing
+        "parsed_json_ok": 0,
+        "parsed_p_true_ok": 0,
+        "is_unknown": 0,
+    }
+
+    # Hidden vectors (optional): zeros to keep shape consistent if probe expects them
+    vectors = {name: np.zeros(256, dtype=np.float32) for name in VECTOR_KEYS}
+
+    return DemoFeatures(scalars=scalars, vectors=vectors)
+
+def to_vec256(x: np.ndarray):
+    """Trim/pad to 256."""
+    x = np.asarray(x).astype(np.float32).ravel()
+    if x.size < 256:
+        x = np.pad(x, (0, 256 - x.size))
+    elif x.size > 256:
+        x = x[:256]
+    return x
+
+# ===========================
+# Transformer probe (PyTorch)
+# ===========================
+
+class DropPath(torch.nn.Module):
+    def __init__(self, p=0.0):
+        super().__init__()
+        self.p = float(p)
+    def forward(self, x):
+        if not self.training or self.p == 0.0:
+            return x
+        keep = 1.0 - self.p
+        mask = torch.empty(x.shape[0], 1, 1, device=x.device).bernoulli_(keep)
+        return x * mask / keep
+
+class EncoderBlock(torch.nn.Module):
+    def __init__(self, d_model=256, nhead=8, d_ff=1024, p_drop=0.1, p_stoch=0.05):
+        super().__init__()
+        self.mha = torch.nn.MultiheadAttention(d_model, nhead, dropout=p_drop, batch_first=True)
+        self.drop_path = DropPath(p_stoch)
+        self.ln1 = torch.nn.LayerNorm(d_model)
+        self.ln2 = torch.nn.LayerNorm(d_model)
+        self.ff = torch.nn.Sequential(
+            torch.nn.Linear(d_model, d_ff),
+            torch.nn.GELU(),
+            torch.nn.Dropout(p_drop),
+            torch.nn.Linear(d_ff, d_model),
+            torch.nn.Dropout(p_drop),
+        )
+
+    def forward(self, x, need_attn=False):
+        x2, attn = self.mha(x, x, x, need_weights=need_attn, average_attn_weights=False)
+        x = self.ln1(x + self.drop_path(x2))
+        x2 = self.ff(x)
+        x = self.ln2(x + self.drop_path(x2))
+        return x, attn
+
+class TinyTransformerProbe(torch.nn.Module):
+    def __init__(self, n_tokens:int, d_model=256, nhead=8, num_layers=3, d_ff=1024, p_drop=0.1, p_stoch=0.05):
+        super().__init__()
+        self.hidden_projs = torch.nn.ModuleList([torch.nn.Sequential(
+            torch.nn.LayerNorm(256), torch.nn.Linear(256, d_model)
+        ) for _ in range(max(0, n_tokens-1))])
+        self.scalar_proj = torch.nn.Sequential(torch.nn.LayerNorm(13), torch.nn.Linear(13, d_model))
+        self.token_type = torch.nn.Embedding(n_tokens, d_model)
+        self.cls = torch.nn.Parameter(torch.zeros(1, 1, d_model))
+        self.pos_drop = torch.nn.Dropout(p_drop)
+        self.enc = torch.nn.ModuleList([EncoderBlock(d_model, nhead, d_ff, p_drop, p_stoch) for _ in range(num_layers)])
+        self.head = torch.nn.Sequential(
+            torch.nn.LayerNorm(d_model),
+            torch.nn.Linear(d_model, d_model // 2),
+            torch.nn.GELU(),
+            torch.nn.Dropout(p_drop),
+            torch.nn.Linear(d_model // 2, 1),
+            torch.nn.Sigmoid()
+        )
+
+    def forward(self, tokens_256, token_mask):
+        if token_mask.dim() != 1:
+            token_mask = token_mask.view(-1)
+        B, T, D = tokens_256.shape
+        assert token_mask.numel() == T
+        tok_list = []
+        hid_idx = 0
+        for t in range(T):
+            if token_mask[t]:
+                tok_list.append(self.hidden_projs[hid_idx](tokens_256[:, t, :]))
+                hid_idx += 1
+            else:
+                scal_raw = tokens_256[:, t, :13]
+                tok_list.append(self.scalar_proj(scal_raw))
+        x = torch.stack(tok_list, dim=1)
+        # token type + CLS
+        tt = torch.arange(x.shape[1], device=x.device)
+        x = x + self.token_type(tt)
+        cls = self.cls.expand(B, 1, -1)
+        x = torch.cat([cls, x], dim=1)
+        x = self.pos_drop(x)
+        for layer in self.enc:
+            x, _ = layer(x)
+        pooled = x[:, 0, :]
+        p = self.head(pooled).squeeze(-1)
+        return p
+
+def build_transformer_tokens_from_df(X_df: pd.DataFrame, use_hidden: bool):
+    """
+    Returns tokens [B,T,256], mask [T] (True: hidden pack, False: scalars), labels list.
+    Includes hidden tokens only if all 256 columns exist.
+    """
+    B = len(X_df)
+    tokens = []
+    labels = []
+    mask = []
+    if use_hidden:
+        for name in VECTOR_KEYS:
+            cols = [f"{name}_{i}" for i in range(256)]
+            if set(cols).issubset(X_df.columns):
+                mat = X_df[cols].fillna(0.0).to_numpy(dtype=np.float32)
+                tokens.append(mat); labels.append(name); mask.append(True)
+    # scalars as final token (padded)
+    scal = X_df[SCALAR_KEYS].fillna(0.0).to_numpy(dtype=np.float32)
+    if scal.shape[1] < 256:
+        scal = np.pad(scal, ((0,0),(0,256-scal.shape[1])), 'constant')
+    elif scal.shape[1] > 256:
+        scal = scal[:, :256]
+    tokens.append(scal.astype(np.float32)); labels.append("scalars_256"); mask.append(False)
+    out = np.stack(tokens, axis=1)
+    return out, np.array(mask, dtype=bool), labels
+
+def xform_predict_from_blob(blob: dict, X_df: pd.DataFrame, use_hidden: bool):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    X_tok, mask_np, _ = build_transformer_tokens_from_df(X_df, use_hidden)
+    mask_t = torch.tensor(mask_np, dtype=torch.bool).to(device)
+
+    arch = blob.get("arch", {})
+    n_tokens = X_tok.shape[1]
+    model = TinyTransformerProbe(
+        n_tokens=n_tokens,
+        d_model=arch.get("d_model", 256),
+        nhead=arch.get("nhead", 8),
+        num_layers=arch.get("num_layers", 3),
+        d_ff=arch.get("d_ff", 1024),
+        p_drop=arch.get("p_drop", 0.1),
+        p_stoch=arch.get("p_stoch", 0.05),
+    ).to(device)
+    state = blob["model_state_dict"]
+    # state may be Tensors; ensure on CPU
+    state = {k: (v if isinstance(v, torch.Tensor) else torch.tensor(v)) for k, v in state.items()}
+    model.load_state_dict(state)
+    model.eval()
+
+    with torch.no_grad():
+        p = model(torch.tensor(X_tok).to(device), mask_t).cpu().numpy()
+
+    cal = blob.get("calibration")
+    if cal is not None:
+        cal_obj = pickle.loads(cal["payload"])
+        if cal["type"] == "platt":
+            p = cal_obj.predict_proba(p.reshape(-1,1))[:,1]
         else:
-            for i, val in enumerate(vec):
-                expanded[f"{base}_{i}"] = float(val)
-    return [expanded.get(name, np.nan) for name in feat_names]
+            p = cal_obj.transform(p)
+    return p
 
-# ----------------------------- Main -----------------------------
+# ===========================
+# Probe loader
+# ===========================
+
+@dataclass
+class LoadedProbe:
+    kind: str  # "sk" or "xform"
+    model: object
+    feature_names: list
+
+def load_probe_dir(probe_dir: Path) -> LoadedProbe:
+    probe_dir = Path(probe_dir)
+    feat_path = probe_dir / "feature_names.json"
+    if not feat_path.exists():
+        raise FileNotFoundError(f"feature_names.json not found in {probe_dir}")
+    feature_names = json.loads(feat_path.read_text())
+
+    # Prefer transformer blob if present
+    pt_path = probe_dir / "probe_model.pt"
+    if pt_path.exists():
+        blob = torch.load(pt_path, map_location="cpu")
+        return LoadedProbe(kind="xform", model=blob, feature_names=feature_names)
+
+    # else look for sklearn joblib
+    jl_path = probe_dir / "probe_model.joblib"
+    if jl_path.exists():
+        model = joblib.load(jl_path)
+        return LoadedProbe(kind="sk", model=model, feature_names=feature_names)
+
+    raise FileNotFoundError(f"No probe model found in {probe_dir} (expected probe_model.pt or probe_model.joblib)")
+
+# ===========================
+# Feature row assembly
+# ===========================
+
+def assemble_feature_row(features: DemoFeatures, parsed_json_ok: int, parsed_p_true_ok: int, answer_span: str, p_true_self: float):
+    scal = dict(features.scalars)
+    scal["parsed_json_ok"] = int(parsed_json_ok)
+    scal["parsed_p_true_ok"] = int(parsed_p_true_ok)
+    scal["answer_len"] = int(len(answer_span.split())) if answer_span else 0
+    if p_true_self is not None:
+        scal["model_confidence"] = float(p_true_self)
+    is_unknown = 1 if (answer_span.strip().lower() in {"unknown", ""}) else 0
+    scal["is_unknown"] = is_unknown
+    vecs = {k: to_vec256(v) for k, v in (features.vectors or {}).items()}
+    return scal, vecs
+
+def df_from_row(scalars: dict, vectors: dict, columns: list):
+    row = dict(scalars)
+    # Attach vector columns (name_0..255) if present
+    for name, vec in (vectors or {}).items():
+        for i in range(256):
+            row[f"{name}_{i}"] = float(vec[i])
+    # Build df and reindex to training feature order
+    df = pd.DataFrame([row])
+    df = df.reindex(columns=columns)
+    return df
+
+# ===========================
+# Generation & logits capture
+# ===========================
+
+@torch.no_grad()
+def generate_and_collect(tokenizer, model, prompt: str, max_new_tokens=64, temperature=0.2, top_p=0.95):
+    device = next(model.parameters()).device
+    inputs = tokenizer(prompt, return_tensors="pt")
+    input_ids = inputs["input_ids"].to(device)
+
+    # Generate with logits; we run step-by-step to capture token-level logits
+    gen_ids = []
+    logits_per_step = []
+    past_key_values = None
+    cur_ids = input_ids
+    for step in range(max_new_tokens):
+        out = model(cur_ids, use_cache=True, past_key_values=past_key_values, output_logits=True)
+        logits = out.logits[:, -1, :].squeeze(0)  # [V]
+        probs = torch.softmax(logits / max(temperature, 1e-6), dim=-1)
+        # nucleus sampling
+        if top_p < 1.0:
+            sorted_probs, sorted_idx = torch.sort(probs, descending=True)
+            cum = torch.cumsum(sorted_probs, dim=-1)
+            cutoff = (cum > top_p).nonzero(as_tuple=True)[0]
+            if cutoff.numel() > 0:
+                last = cutoff[0].item()
+                sorted_probs = sorted_probs[: last + 1]
+                sorted_idx = sorted_idx[: last + 1]
+                probs = sorted_probs / sorted_probs.sum()
+                next_id = sorted_idx[torch.multinomial(probs, num_samples=1)].item()
+            else:
+                next_id = torch.multinomial(probs, num_samples=1).item()
+        else:
+            next_id = torch.multinomial(probs, num_samples=1).item()
+
+        gen_ids.append(next_id)
+        logits_per_step.append(logits.detach().float().cpu().numpy())
+
+        next_token = torch.tensor([[next_id]], device=device)
+        cur_ids = torch.cat([cur_ids, next_token], dim=1)
+        past_key_values = out.past_key_values
+
+        # simple stop on newline or close brace if the model produced a JSON
+        if next_id == tokenizer.eos_token_id:
+            break
+        if len(gen_ids) > 4 and tokenizer.decode(gen_ids[-1:]).strip().endswith("}"):
+            # give it a couple extra tokens to finish
+            if len(gen_ids) > 8:
+                break
+
+    full_ids = torch.cat([input_ids, torch.tensor([gen_ids], device=device)], dim=1)
+    text = tokenizer.decode(full_ids[0], skip_special_tokens=True)
+    return text, gen_ids, logits_per_step, inputs["input_ids"][0].cpu().tolist()
+
+# ===========================
+# Main
+# ===========================
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", choices=["llama31","qwen"], required=True)
-    ap.add_argument("--model_id", type=str, default=None, help="override HF model id")
-    ap.add_argument("--probes_dir", type=str, default="probes")
+    ap.add_argument("--model", type=str, required=True, help="llama31 or qwen")
+    ap.add_argument("--probe_dir", type=str, required=True, help="Path to a single trained probe dir (e.g., probes/backend_llama/probe_mlp)")
+    ap.add_argument("--use_hidden", action="store_true", help="Must match how the probe was trained")
     ap.add_argument("--max_new_tokens", type=int, default=64)
-    ap.add_argument("--use_hidden", action="store_true")
+    ap.add_argument("--temperature", type=float, default=0.2)
+    ap.add_argument("--top_p", type=float, default=0.95)
     args = ap.parse_args()
 
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-    try:
-        torch.set_float32_matmul_precision("high")
-    except Exception:
-        pass
-
-    # Load adapter (tries project wrapper first)
-    adapter = load_adapter(args)
-    tok = adapter.tok
-    hf_causal_lm = adapter.model
-    device = next(hf_causal_lm.parameters()).device
+    # Load LM
+    tok, lm, model_id = load_lm(args.model)
 
     # Load probe
-    probe_dir = Path(args.probes_dir) / f"backend_{BACKEND_KEY[args.model]}"
-    if not probe_dir.exists():
-        print(f"[ERR] Probe directory not found: {probe_dir}", file=sys.stderr)
-        sys.exit(1)
-    probe = joblib.load(probe_dir / "probe_model.joblib")
-    feat_names = json.load(open(probe_dir / "feature_names.json", "r", encoding="utf-8"))
+    probe = load_probe_dir(Path(args.probe_dir))
+    print(f"[Probe] Loaded from {args.probe_dir} | kind={probe.kind}")
 
-    print("Type your trivia question (Ctrl-C to quit).")
+    # Interactive loop
+    print("\nType your trivia question (or Ctrl-C to quit).\n")
     while True:
         try:
-            q = input("\nQ: ").strip()
-        except (EOFError, KeyboardInterrupt):
+            q = input("Q: ").strip()
+        except KeyboardInterrupt:
             print("\nBye.")
-            break
+            return
         if not q:
             continue
 
-        prompt = build_prompt(q)
-
-        t0 = time.perf_counter()
-        inp, gen = adapter.generate_with_states(prompt)
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        dt = time.perf_counter() - t0
-
-        start = inp["input_ids"].shape[-1]
-        new_ids = gen.sequences[:, start:]
-        raw_text = tok.decode(new_ids[0], skip_special_tokens=True).strip()
-
-        # Parse model JSON
-        ans_text, p_model = extract_answer_and_prob(raw_text)
-        if not ans_text:
-            ans_text = raw_text
-
-        # === TOKEN-LEVEL STATS (generation-time), EXACTLY LIKE TRAINING ===
-        scores = gen.scores or []
-        gen_ids_seq = new_ids[0].tolist()
-        stats = compute_generation_stats(scores, gen_ids_seq)
-
-        # === HIDDEN STATES (teacher-forced over prompt+generated), EXACT MATCH ===
-        with torch.no_grad():
-            full_ids = torch.cat([inp["input_ids"].to(device), new_ids.to(device)], dim=-1)
-            attn = torch.ones_like(full_ids)
-            out = hf_causal_lm(input_ids=full_ids, attention_mask=attn,
-                                output_hidden_states=True, use_cache=False, return_dict=True)
-            hs_final = out.hidden_states[-1][0]  # [T, d]
-            gen_len = new_ids.shape[-1]
-            h_ans = hs_final[-gen_len:]
-            h_last = h_ans[-1] if h_ans.shape[0] > 0 else None
-            h_pool = h_ans.mean(dim=0) if h_ans.shape[0] > 0 else None
-
-            mid_ix = len(out.hidden_states) // 2
-            hs_mid = out.hidden_states[mid_ix][0]
-            h_ans_mid = hs_mid[-gen_len:]
-            h_last_mid = h_ans_mid[-1] if h_ans_mid.shape[0] > 0 else None
-            h_pool_mid = h_ans_mid.mean(dim=0) if h_ans_mid.shape[0] > 0 else None
-
-        h_last_256 = pack_256(h_last) if h_last is not None else None
-        h_pool_256 = pack_256(h_pool) if h_pool is not None else None
-        h_last_mid_256 = pack_256(h_last_mid) if h_last_mid is not None else None
-        h_pool_mid_256 = pack_256(h_pool_mid) if h_pool_mid is not None else None
-
-        # === RESCORE CANONICAL JSON (exact formatting) ===
-        safe_ans = ans_text.replace('"', '\\"')
-        pt = p_model if p_model is not None else 0.00
-        canon_json = f'{{"answer":"{safe_ans}","p_true":{pt:.2f}}}'
-        rescore_lp = rescore_mean_logprob(hf_causal_lm, tok, prompt, canon_json)
-
-        # === Assemble feature row exactly as training ===
-        row = {
-            "model_confidence": p_model,
-            "lp_mean": stats["lp_mean"],
-            "seq_conf": stats["seq_conf"],
-            "entropy_mean": stats["entropy_mean"],
-            "entropy_last": stats["entropy_last"],
-            "entropy_std": stats["entropy_std"],
-            "margin_mean": stats["margin_mean"],
-            "margin_last": stats["margin_last"],
-            "margin_min": stats["margin_min"],
-            "rescore_logp": rescore_lp,
-            "answer_len": int(gen_len),
-            "parsed_json_ok": int(ans_text is not None and len(ans_text) > 0),
-            "parsed_p_true_ok": int(p_model is not None),
-            "is_unknown": int(ans_text.strip().lower() == "unknown"),
-            # vector packs
-            "h_last_256": h_last_256 if args.use_hidden else None,
-            "h_pool_256": h_pool_256 if args.use_hidden else None,
-            "h_last_mid_256": h_last_mid_256 if args.use_hidden else None,
-            "h_pool_mid_256": h_pool_mid_256 if args.use_hidden else None,
-        }
-
-        # probe prediction
-        x = build_feature_row(row, feat_names)
-        p_right = float(probe.predict_proba([x])[0, 1])
-
-        # print
-        print("\n=== Prompt (few-shot as in training) ===")
+        prompt = FEWSHOT_FIXED_ANSWERABLE.replace("{EVAL_QUESTION}", q)
+        print("\n=== Prompt (few-shot, enforced JSON) ===")
         print(prompt)
+
+        # Generate
+        text, gen_ids, logits_per_step, prompt_ids = generate_and_collect(
+            tok, lm, prompt, max_new_tokens=args.max_new_tokens, temperature=args.temperature, top_p=args.top_p
+        )
         print("\n=== Model output (raw) ===")
-        print(raw_text)
-        print("\n=== Canonical JSON used for rescoring ===")
-        print(canon_json)
+        tail = text.split("Q: {EVAL_QUESTION}")[-1] if "{EVAL_QUESTION}" in text else text
+        print(text)
+
+        # Extract JSON
+        obj, frag = extract_first_json(text)
+        if obj:
+            ans = normalize_answer_span(obj.get("answer", ""))
+            p_true_self = obj.get("p_true", None)
+            try:
+                p_true_self = float(p_true_self) if p_true_self is not None else None
+            except Exception:
+                p_true_self = None
+            parsed_json_ok = 1
+            parsed_p_true_ok = 1 if p_true_self is not None and 0.0 <= p_true_self <= 1.0 else 0
+        else:
+            ans = ""
+            p_true_self = None
+            parsed_json_ok = 0
+            parsed_p_true_ok = 0
+
+        print("\n=== Extracted JSON ===")
+        if obj:
+            print(json.dumps({"answer": ans, "p_true": p_true_self}, ensure_ascii=False))
+        else:
+            print("(none)")
+
+        # Features
+        if COLLECT == "featurize_for_probe":
+            try:
+                # Use user's training-time featurizer if available
+                from scripts.collect_internals import featurize_for_probe
+                feat = featurize_for_probe(
+                    tokenizer=tok, model=lm,
+                    prompt_text=prompt, full_text=text,
+                    prompt_ids=prompt_ids, gen_token_ids=gen_ids,
+                    logits_per_step=logits_per_step,
+                    use_hidden=args.use_hidden,
+                    backend=args.model
+                )
+                # Expected to return dict with scalar keys + vector packs if requested
+                scalars = {k: feat.get(k, 0.0) for k in SCALAR_KEYS}
+                vectors = {}
+                if args.use_hidden:
+                    for name in VECTOR_KEYS:
+                        if name in feat and feat[name] is not None:
+                            vectors[name] = to_vec256(feat[name])
+                        else:
+                            vectors[name] = np.zeros(256, dtype=np.float32)
+            except Exception as e:
+                print(f"[WARN] featurize_for_probe failed; using fallback. ({e})")
+                demo = basic_featurizer(tok, lm, prompt_ids, gen_ids, logits_per_step)
+                scalars, vectors = assemble_feature_row(demo, parsed_json_ok, parsed_p_true_ok, ans, p_true_self)
+        else:
+            demo = basic_featurizer(tok, lm, prompt_ids, gen_ids, logits_per_step)
+            # fill in parsed flags, answer_len, model_confidence
+            scalars, vectors = assemble_feature_row(demo, parsed_json_ok, parsed_p_true_ok, ans, p_true_self)
+
+        # Build DF row in training column order
+        df = df_from_row(scalars, vectors if args.use_hidden else {}, probe.feature_names)
+
+        # Probe inference
+        if probe.kind == "sk":
+            p_probe = float(probe.model.predict_proba(df.values)[:, 1][0])
+        else:
+            # transformer blob
+            p_arr = xform_predict_from_blob(probe.model, df, use_hidden=args.use_hidden)
+            p_probe = float(p_arr[0])
+
+        # Present
         print("\n=== Parsed self-report ===")
-        print(f'p_true: {p_model if p_model is not None else "None"}')
+        print(f"p_true: {p_true_self if parsed_p_true_ok else None} | parsed_json_ok={bool(parsed_json_ok)} parsed_p_true_ok={bool(parsed_p_true_ok)}")
         print("\n=== Probe ===")
-        print(f"P(correct): {p_right:.3f}")
-        print("\n=== Decode stats (generation-time, training-aligned) ===")
-        for k in ["answer_len","lp_mean","seq_conf","entropy_mean","entropy_last","entropy_std","margin_mean","margin_last","margin_min","rescore_logp"]:
-            v = row[k] if k in row else None
-            if isinstance(v, float):
-                print(f"{k}={v:.3f}")
-            else:
-                print(f"{k}={v}")
-        print(f"\n[info] gen_len={gen_len}  gen_time={dt:.3f}s")
+        print(f"P(correct): {p_probe:.3f}")
+
+        # Optional: quick decode stats echo
+        print("\n=== Decode stats (fallback approx) ===")
+        dbg = {k: scalars.get(k) for k in ["answer_len", "lp_mean", "seq_conf", "entropy_mean", "margin_mean", "rescore_logp"]}
+        dbg_str = "  ".join([f"{k}={dbg[k]:.3f}" if isinstance(dbg[k], (int,float)) else f"{k}={dbg[k]}" for k in dbg])
+        print(dbg_str)
+
+        # Final line
+        print("\n--- Result ---")
+        print(f"Answer: {ans!r}")
+        print(f"LM self p_true: {p_true_self if parsed_p_true_ok else 'N/A'}")
+        print(f"Probe P(correct): {p_probe:.3f}\n")
 
 if __name__ == "__main__":
     main()
