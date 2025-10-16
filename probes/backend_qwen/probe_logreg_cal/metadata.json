@@ -1,0 +1,25 @@
+{
+  "probe_type": "logreg_cal",
+  "use_hidden": true,
+  "feature_names_path": "probes/backend_qwen/probe_logreg_cal/feature_names.json",
+  "model_path": "probes/backend_qwen/probe_logreg_cal/probe_model.joblib",
+  "pred_paths": {
+    "train": "probes/backend_qwen/probe_logreg_cal/pred_train.csv",
+    "val": "probes/backend_qwen/probe_logreg_cal/pred_val.csv",
+    "test": "probes/backend_qwen/probe_logreg_cal/pred_test.csv"
+  },
+  "plots": {
+    "train": {
+      "roc": "probes/backend_qwen/probe_logreg_cal/roc_train.png",
+      "pr": "probes/backend_qwen/probe_logreg_cal/pr_train.png"
+    },
+    "val": {
+      "roc": "probes/backend_qwen/probe_logreg_cal/roc_val.png",
+      "pr": "probes/backend_qwen/probe_logreg_cal/pr_val.png"
+    },
+    "test": {
+      "roc": "probes/backend_qwen/probe_logreg_cal/roc_test.png",
+      "pr": "probes/backend_qwen/probe_logreg_cal/pr_test.png"
+    }
+  }
+}

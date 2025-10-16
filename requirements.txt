@@ -17,3 +17,4 @@ typer>=0.12
 wikipedia>=1.4.0
 wandb>=0.17
 flash-attn
+matplotlib
