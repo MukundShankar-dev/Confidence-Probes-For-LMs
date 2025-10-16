@@ -2,7 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 Demo script for running LLM inference with probe predictions
-Stage 2: Model inference with probe loading
+
+Example usage:
+    python -m scripts.demo --model llama31 --probe_dir probes/backend_llama/probe_mlp --use_hidden --interactive
+
 """
 import argparse
 import json
