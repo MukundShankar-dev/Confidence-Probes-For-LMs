@@ -7,4 +7,5 @@ src/conf/__pycache__/
 src/eval/__pycache__/
 logs/
 data/
+project_env/
 .DS_Store
