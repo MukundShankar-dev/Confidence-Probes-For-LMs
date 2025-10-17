@@ -20,81 +20,81 @@ num_shards=$SLURM_ARRAY_TASK_COUNT
 shard_id=$SLURM_ARRAY_TASK_ID
 
 # === TRIVIAQA EXPERIMENTS ===
-# python -m scripts.collect_internals \
-#   --backend qwen \
-#   --model_id "Qwen/Qwen2.5-7B-Instruct" \
-#   --dataset triviaqa --split validation \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" --shard_id "$shard_id" \
-#   --out data/probe/triviaqa/qwen/qwen_final_only_shard${shard_id}.jsonl
+python -m scripts.collect_internals \
+  --backend qwen \
+  --model_id "Qwen/Qwen2.5-7B-Instruct" \
+  --dataset triviaqa --split validation \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" --shard_id "$shard_id" \
+  --out data/probe/triviaqa/qwen/qwen_final_only_shard${shard_id}.jsonl
 
-# python -m scripts.collect_internals \
-#   --backend gemma \
-#   --model_id "google/gemma-3-12b-it" \
-#   --dataset triviaqa --split validation \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" --shard_id "$shard_id" \
-#   --out data/probe/triviaqa/gemma/gemma_final_only_shard${shard_id}.jsonl
+python -m scripts.collect_internals \
+  --backend gemma \
+  --model_id "google/gemma-3-12b-it" \
+  --dataset triviaqa --split validation \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" --shard_id "$shard_id" \
+  --out data/probe/triviaqa/gemma/gemma_final_only_shard${shard_id}.jsonl
 
-# python -m scripts.collect_internals \
-#   --backend llama31 \
-#   --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
-#   --dataset triviaqa --split validation \
-#   --max_new_tokens 64 \
-#   --num_shards $num_shards --shard_id $shard_id \
-#   --out data/probe/triviaqa/llama31/llama31_final_only_shard${shard_id}.jsonl
+python -m scripts.collect_internals \
+  --backend llama31 \
+  --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --dataset triviaqa --split validation \
+  --max_new_tokens 64 \
+  --num_shards $num_shards --shard_id $shard_id \
+  --out data/probe/triviaqa/llama31/llama31_final_only_shard${shard_id}.jsonl
 
 # === HOTPOTQA EXPERIMENTS ===
 
-# python -m scripts.collect_internals \
-#   --backend qwen \
-#   --model_id "Qwen/Qwen2.5-7B-Instruct" \
-#   --dataset hotpot_qa --split validation \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" --shard_id "$shard_id" \
-#   --out data/probe/hotpotqa/qwen/qwen_final_only_shard${shard_id}.jsonl
+python -m scripts.collect_internals \
+  --backend qwen \
+  --model_id "Qwen/Qwen2.5-7B-Instruct" \
+  --dataset hotpot_qa --split validation \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" --shard_id "$shard_id" \
+  --out data/probe/hotpotqa/qwen/qwen_final_only_shard${shard_id}.jsonl
 
-# python -m scripts.collect_internals \
-#   --backend gemma \
-#   --model_id "google/gemma-3-12b-it" \
-#   --dataset hotpot_qa --split validation \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" --shard_id "$shard_id" \
-#   --out data/probe/hotpotqa/gemma/gemma_final_only_shard${shard_id}.jsonl
+python -m scripts.collect_internals \
+  --backend gemma \
+  --model_id "google/gemma-3-12b-it" \
+  --dataset hotpot_qa --split validation \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" --shard_id "$shard_id" \
+  --out data/probe/hotpotqa/gemma/gemma_final_only_shard${shard_id}.jsonl
 
-# python -m scripts.collect_internals \
-#   --backend llama31 \
-#   --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
-#   --dataset hotpot_qa --split validation \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" --shard_id "$shard_id" \
-#   --out data/probe/hotpotqa/llama31/llama31_final_only_shard${shard_id}.jsonl
+python -m scripts.collect_internals \
+  --backend llama31 \
+  --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --dataset hotpot_qa --split validation \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" --shard_id "$shard_id" \
+  --out data/probe/hotpotqa/llama31/llama31_final_only_shard${shard_id}.jsonl
 
 # === SQuADv2 EXPERIMENTS ===
 
-# python -m scripts.collect_internals \
-#   --backend qwen \
-#   --model_id "Qwen/Qwen2.5-7B-Instruct" \
-#   --dataset squad_v2 --split validation \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" --shard_id "$shard_id" \
-#   --out data/probe/squadv2/qwen/qwen_final_only_shard${shard_id}.jsonl
+python -m scripts.collect_internals \
+  --backend qwen \
+  --model_id "Qwen/Qwen2.5-7B-Instruct" \
+  --dataset squad_v2 --split validation \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" --shard_id "$shard_id" \
+  --out data/probe/squadv2/qwen/qwen_final_only_shard${shard_id}.jsonl
 
-# python -m scripts.collect_internals \
-#   --backend gemma \
-#   --model_id "google/gemma-3-12b-it" \
-#   --dataset squad_v2 --split validation \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" --shard_id "$shard_id" \
-#   --out data/probe/squadv2/gemma/gemma_final_only_shard${shard_id}.jsonl
+python -m scripts.collect_internals \
+  --backend gemma \
+  --model_id "google/gemma-3-12b-it" \
+  --dataset squad_v2 --split validation \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" --shard_id "$shard_id" \
+  --out data/probe/squadv2/gemma/gemma_final_only_shard${shard_id}.jsonl
 
-# python -m scripts.collect_internals \
-#   --backend llama31 \
-#   --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
-#   --dataset squad_v2 --split validation \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" --shard_id "$shard_id" \
-#   --out data/probe/squadv2/llama31/llama31_final_only_shard${shard_id}.jsonl
+python -m scripts.collect_internals \
+  --backend llama31 \
+  --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --dataset squad_v2 --split validation \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" --shard_id "$shard_id" \
+  --out data/probe/squadv2/llama31/llama31_final_only_shard${shard_id}.jsonl
 
 # DATASET OPTIONS:
 # # TriviaQA (unfiltered), validation split
@@ -112,7 +112,7 @@ shard_id=$SLURM_ARRAY_TASK_ID
 # # Natural Questions Open
 # --dataset nq_open --split validation
 
-python -m scripts.make_probe_split \
-  --root data/probe \
-  --out_dir data/probe_splits_80_10_10 \
-  --train_frac 0.80 --val_frac 0.10 --test_frac 0.10
+# python -m scripts.make_probe_split \
+#   --root data/probe \
+#   --out_dir data/probe_splits_80_10_10 \
+#   --train_frac 0.80 --val_frac 0.10 --test_frac 0.10

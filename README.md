@@ -54,6 +54,9 @@ pip install -r requirements.txt
 ## Run
 1. Prepare data using `python scripts/prepare_data.py --config configs/default.yaml`
 2. Prepare model using `python scripts/prepare_model.py --model-id=...`. Here, `model-id` must be in `[meta-llama/Meta-Llama-3.1-8B-Instruct, google/gemma-3-12b-it, Qwen/Qwen2.5-7B-Instruct]`. You may need to log into huggingface CLI.
+
+NOTE: STEPS 2-4 ARE OPTIONAL. SKIP TO 6 IF YOU WANT.
+
 2. Baseline. The commands to run the baseline are below. Fix num shards to 1 and shard_id to 0 if running on single machine.
 ```
 python -m scripts.run_baseline \
@@ -93,14 +96,50 @@ python -m scripts.run_baseline \
 <!-- 3. Train probe: `python scripts/run_probe_training.py --config configs/default.yaml` (needs to be updated) -->
 <!-- 4. Gate+RAG eval: `python scripts/run_gate_abstain.py --config configs/default.yaml`   (needs to be updated) -->
 
+4. Now that baseline has been ran, verify results (can be found in results/) and make sure they make sense.
+
+5. Now collect model internals using the python calls which can be found in `run_collecion.slurm`.
+
+6. Run the following command which generates train/val/test splits using all 3 datasets pooled, per model (from run_collection results): 
+```
+python -m scripts.make_probe_split \
+  --root data/probe \
+  --out_dir data/probe_splits_80_10_10 \
+  --train_frac 0.80 --val_frac 0.10 --test_frac 0.10
+```
+
+7. Train all types of available probes for all current models (qwen and llama at the moment):
+```
+python -m scripts.train_probe --data_dir data/probe_splits_80_10_10 --models llama,qwen --use_hidden --out_dir probes/ --probe_type all --xform_dump_attn --xform_epochs 40 --xform_calibrate --xform_cal_debug
+```
+
+8. Run the interactive demo using (adjust model and probe parameters as needed):
+```
+python -m scripts.demo --model llama31 --probe_dir probes/backend_llama/probe_mlp --use_hidden --interactive
+```
+
 ## Notes
 `run_baseline.py` provides model output, exact match (Exact Match) score, F1 (Brier Score), ground truths, `seq_conf` (geometric mean token probability over the generated answer, excluding the last step), `conf_entropy_mean` (smoother, length-agnostic version). Taking something like `final_conf = 0.7 * seq_conf + 0.3 * conf_entropy_mean` would be beneficial as a "confidence score".
+
+We currently have the following types of probes:
+  - Logistic regression
+  - Logistic regression with calibration
+  - MLP
+  - Decision Tree
+  - Small transformer
+
+From preliminary results, MLP is the best, while transformer is the most stable/consistent. The rest are garbage. 
+
 <!-- - For probing, prefer Transformers (not vLLM) to access `hidden_states`. -->
 <!-- - Swap models by editing `model.model_id`. -->
 
 ## Fix list
-1. Update datasets (add Google NQA and Hot Pot QA), make baseline configurable for this also.
-2. Compare: model confidence scores (from outputs), entropy gains (`seq_conf` and `conf_entropy_mean`) to actual correctness (use mainly `EM`, `F1` is not entirely accurate).
-            --> For example, "16 million" gets F1 of 0.5 if ground truth is "18 million", when it is actually fully incorrect.
-3. Look into training probes - how, which layers, why? 
-4. How do we deal with the model obstaining? Do we penalize? 
+1. Our datasets are s.t. the LMs mostly get answers wrong. This means that we have pretty hefty class imbalance. Try to find an easy dataset which these LMs will answer all if not most correct or just make one synthetically (using gpt or something) to inflate the positive numbers where models get answers correct.
+
+2. Figure out nice ways to visualize and interpret the stuff inside training reports (found in subdirectories of `probes/`). The `best_threshold` and `best_f1` also would probably go up when we fix (1). 
+
+3. See if there are more complex or clever probes we can make instead of just look at specific parts of model and learn. 
+
+4. Find out what most important statistics from the ones we collected are. Attention maps (in `probes/*/probe_xform`) are a good place to start and we can also probably expand on the logistic regressions to see which features are identified as important.
+
+5. Make the demo nicer (we can probably do a live demo during presentation then).
