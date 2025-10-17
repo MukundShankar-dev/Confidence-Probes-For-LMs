@@ -5,6 +5,7 @@ import torch
 import os
 import json
 import re
+import statistics
 from tqdm import tqdm
 from transformers.utils import logging as hf_logging
 
@@ -50,22 +51,22 @@ Calibration guidance:
 - If no answer is supported by evidence, output "Unknown" with an appropriately low p_true.
 
 Q: Who wrote Hamlet?
-{{"answer": "William Shakespeare", "p_true": 0.95}}
+{"answer": "William Shakespeare", "p_true": 0.95}
 
 Q: What is the capital of France?
-{{"answer": "Paris", "p_true": 0.92}}
+{"answer": "Paris", "p_true": 0.92}
 
 Q: What is the capital of South Africa?
-{{"answer": "Pretoria", "p_true": 0.60}}
+{"answer": "Pretoria", "p_true": 0.60}
 
 Q: Which element has the symbol 'Au'?
-{{"answer": "Aluminum", "p_true": 0.15}}
+{"answer": "Aluminum", "p_true": 0.15}
 
 Q: Who authored the Voynich Manuscript?
-{{"answer": "Unknown", "p_true": 0.20}}
+{"answer": "Unknown", "p_true": 0.20}
 
 Q: Which planet is known as the Red Planet?
-{{"answer": "Mars", "p_true": 0.85}}
+{"answer": "Mars", "p_true": 0.85}
 
 Q: {EVAL_QUESTION}
 """
@@ -82,19 +83,19 @@ Calibration guidance:
 - If multiple plausible answers exist or the question is ambiguous, reduce p_true appropriately.
 
 Q: Who wrote Hamlet?
-{{"answer": "William Shakespeare", "p_true": 0.95}}
+{"answer": "William Shakespeare", "p_true": 0.95}
 
 Q: What is the capital of France?
-{{"answer": "Paris", "p_true": 0.92}}
+{"answer": "Paris", "p_true": 0.92}
 
 Q: What is the capital of South Africa?
-{{"answer": "Pretoria", "p_true": 0.60}}
+{"answer": "Pretoria", "p_true": 0.60}
 
 Q: Which element has the symbol 'Au'?
-{{"answer": "Aluminum", "p_true": 0.15}}
+{"answer": "Aluminum", "p_true": 0.15}
 
 Q: Which planet is known as the Red Planet?
-{{"answer": "Mars", "p_true": 0.85}}
+{"answer": "Mars", "p_true": 0.85}
 
 Q: {EVAL_QUESTION}
 """
@@ -533,7 +534,22 @@ def main(cfg: Cfg, args):
     # === dataset ===
     # Allow CLI overrides for dataset/split without editing YAML (handled in __main__)
     limit = args.limit or cfg.data.limit
-    ds = load_qa(cfg.data.dataset, cfg.data.split, limit)
+
+    # Resolve supplementary path (optional auto-default)
+    supp = args.supplementary_data
+    if supp is None:
+        default_path = "src/data/supplementary_data.jsonl"
+        if os.path.exists(default_path):
+            supp = default_path
+
+    # load_qa now supports supplementary_data / supplementary_only
+    ds = load_qa(
+        cfg.data.dataset,
+        cfg.data.split,
+        limit,
+        supplementary_data=supp,
+        supplementary_only=args.supplementary_only
+    )
 
     if args.num_shards > 1:
         ds = ds.shard(num_shards=args.num_shards, index=args.shard_id, contiguous=True)
@@ -731,7 +747,11 @@ def main(cfg: Cfg, args):
             "is_unknown": int(ans.strip().lower() == "unknown"),
         }
 
-        p_true_probe = probe.predict(row_feats) if probe else None
+        p_true_probe = ProbeRuntime(args.probe_path) .predict(row_feats) if False else (ProbeRuntime(args.probe_path).predict(
+            row_feats) if False else (ProbeRuntime(args.probe_path).predict(row_feats) if False else (None)))
+        # keep original behavior:
+        p_true_probe = ProbeRuntime(args.probe_path).predict(
+            row_feats) if False else (probe.predict(row_feats) if probe else None)
         rows[-1]["p_true_probe"] = p_true_probe
 
     overall_metrics = evaluate_batch(preds, refs)
@@ -792,6 +812,16 @@ if __name__ == "__main__":
 
     ap.add_argument("--num_shards", type=int, default=1, help="for distributed eval (slurm)")
     ap.add_argument("--shard_id", type=int, default=0, help="shard index for distributed eval (slurm)")
+
+    ap.add_argument("--probe_path", type=str, default=None,
+                    help="Optional path to a trained verifier probe")
+
+    # NEW: training-only supplement
+    ap.add_argument("--supplementary_data", type=str, default=None,
+                    help="Path to a TriviaQA-like JSONL to append/use for TRAIN "
+                         "(e.g., src/data/supplementary_data.jsonl)")
+    ap.add_argument("--supplementary_only", action="store_true", default=False,
+                    help="Use only the supplementary JSONL for TRAIN (no base dataset)")
 
     args = ap.parse_args()
     cfg = Cfg.load(args.config)
