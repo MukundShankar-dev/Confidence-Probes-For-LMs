@@ -131,6 +131,7 @@ def load_qa(
     split: str,
     limit: int,
     supplementary_data: Optional[str] = None,
+    supplementary_only: bool = False,
 ):
     """
     Return a HuggingFace Dataset where each example is a dict:
@@ -144,9 +145,29 @@ def load_qa(
       - "triviaqa"     -> huggingface 'trivia_qa' (unfiltered)
       - "hotpotqa"/"hotpot_qa" -> huggingface 'hotpot_qa' ('distractor' config)
 
-    If `supplementary_data` (path to a JSONL) is provided and `split == "train"`,
-    we will append it to the loaded dataset after formatting to the unified schema.
+    Supplement handling:
+      - If `supplementary_only` is True, return ONLY the supplementary JSONL on the requested split.
+      - If `supplementary_data` is provided, append it to the loaded split (train/validation/test).
+      - If neither flag is set, no supplementary examples are used.
     """
+
+    # ---- supplementary-only short-circuit (works on any split) ----
+    if supplementary_only:
+        if not supplementary_data:
+            # try project default
+            default_path = "src/data/supplementary_data.jsonl"
+            if os.path.exists(default_path):
+                supplementary_data = default_path
+        if not supplementary_data or not os.path.exists(supplementary_data):
+            raise FileNotFoundError(
+                "Supplementary JSONL not found. Pass --supplementary_data "
+                "or place it at src/data/supplementary_data.jsonl"
+            )
+        ds = _load_supplementary_jsonl(supplementary_data)
+        if limit:
+            ds = ds.select(range(min(limit, len(ds))))
+        return ds
+
     # ---- main dataset ----
     if name == "squad":
         ds = load_dataset("squad", split=split)
@@ -172,7 +193,7 @@ def load_qa(
                 ans_list = ex["answers"].get("text", []) or []
             # Canonicalize no-answer so references is never empty
             if not ans_list:
-                ans_list = ["Unknown"]  # <- sentinel that matches your prompt + metrics normalization
+                ans_list = ["Unknown"]  # sentinel aligning with prompt/metrics
             return {
                 "question": ex.get("question", ""),
                 "answers": _dedupe_nonempty(list(ans_list)),
@@ -212,8 +233,8 @@ def load_qa(
     else:
         raise ValueError(f"Unknown dataset {name}")
 
-    # ---- optional supplementary (train only) ----
-    if supplementary_data and split == "train":
+    # ---- optional supplementary (append to ANY split when provided) ----
+    if supplementary_data:
         if not os.path.exists(supplementary_data):
             raise FileNotFoundError(
                 f"Supplementary JSONL not found: {supplementary_data}")

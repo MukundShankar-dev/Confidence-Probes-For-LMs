@@ -28,7 +28,10 @@ from typing import Optional, Tuple
 # Allow fast math
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-torch.set_float32_matmul_precision("high")
+try:
+    torch.set_float32_matmul_precision("high")
+except Exception:
+    pass
 
 # ---------------- Prompts ----------------
 
@@ -51,22 +54,22 @@ Calibration guidance:
 - If no answer is supported by evidence, output "Unknown" with an appropriately low p_true.
 
 Q: Who wrote Hamlet?
-{"answer": "William Shakespeare", "p_true": 0.95}
+{{"answer": "William Shakespeare", "p_true": 0.95}}
 
 Q: What is the capital of France?
-{"answer": "Paris", "p_true": 0.92}
+{{"answer": "Paris", "p_true": 0.92}}
 
 Q: What is the capital of South Africa?
-{"answer": "Pretoria", "p_true": 0.60}
+{{"answer": "Pretoria", "p_true": 0.60}}
 
 Q: Which element has the symbol 'Au'?
-{"answer": "Aluminum", "p_true": 0.15}
+{{"answer": "Aluminum", "p_true": 0.15}}
 
 Q: Who authored the Voynich Manuscript?
-{"answer": "Unknown", "p_true": 0.20}
+{{"answer": "Unknown", "p_true": 0.20}}
 
 Q: Which planet is known as the Red Planet?
-{"answer": "Mars", "p_true": 0.85}
+{{"answer": "Mars", "p_true": 0.85}}
 
 Q: {EVAL_QUESTION}
 """
@@ -83,19 +86,19 @@ Calibration guidance:
 - If multiple plausible answers exist or the question is ambiguous, reduce p_true appropriately.
 
 Q: Who wrote Hamlet?
-{"answer": "William Shakespeare", "p_true": 0.95}
+{{"answer": "William Shakespeare", "p_true": 0.95}}
 
 Q: What is the capital of France?
-{"answer": "Paris", "p_true": 0.92}
+{{"answer": "Paris", "p_true": 0.92}}
 
 Q: What is the capital of South Africa?
-{"answer": "Pretoria", "p_true": 0.60}
+{{"answer": "Pretoria", "p_true": 0.60}}
 
 Q: Which element has the symbol 'Au'?
-{"answer": "Aluminum", "p_true": 0.15}
+{{"answer": "Aluminum", "p_true": 0.15}}
 
 Q: Which planet is known as the Red Planet?
-{"answer": "Mars", "p_true": 0.85}
+{{"answer": "Mars", "p_true": 0.85}}
 
 Q: {EVAL_QUESTION}
 """
@@ -421,8 +424,6 @@ def _rescore_answer_mean_logprob(model, prompt: str, answer: str) -> Optional[fl
         labels = labels.to(dev)
 
         out = hf_model(input_ids=input_ids, attention_mask=attn, labels=labels, use_cache=False)
-        # out.loss is mean over non -100; also compute explicit mean logprob:
-        # mean_nll = loss.item(); mean_logprob = -mean_nll
         mean_logprob = -float(out.loss.item())
         return mean_logprob
     except Exception:
@@ -542,7 +543,7 @@ def main(cfg: Cfg, args):
         if os.path.exists(default_path):
             supp = default_path
 
-    # load_qa now supports supplementary_data / supplementary_only
+    # load_qa now supports supplementary_data / supplementary_only on ANY split
     ds = load_qa(
         cfg.data.dataset,
         cfg.data.split,
@@ -732,14 +733,14 @@ def main(cfg: Cfg, args):
             "seq_conf": seq_conf,
             "entropy_mean": entropy_mean,
             "entropy_last": entropy_last,
-            "entropy_std": entropy_std,          # stddev over content tokens <-- FAIL? 
+            "entropy_std": entropy_std,          # stddev over content tokens
             "margin_mean": margin_mean,
             "margin_last": margin_last,
-            "margin_min": margin_min,        # probe features <-- FAIL?
-            "h_last_256": None,           # list[256]
-            "h_pool_256": None,           # list[256]
-            "h_last_mid_256": None,   # list[256]
-            "h_pool_mid_256": None,   # list[256]
+            "margin_min": margin_min,
+            "h_last_256": None,
+            "h_pool_256": None,
+            "h_last_mid_256": None,
+            "h_pool_mid_256": None,
             "rescore_logp": rescore_logp,
             "answer_len": int(gen_len),
             "parsed_json_ok": int(ans is not None and len(ans) > 0),
@@ -747,11 +748,9 @@ def main(cfg: Cfg, args):
             "is_unknown": int(ans.strip().lower() == "unknown"),
         }
 
-        p_true_probe = ProbeRuntime(args.probe_path) .predict(row_feats) if False else (ProbeRuntime(args.probe_path).predict(
-            row_feats) if False else (ProbeRuntime(args.probe_path).predict(row_feats) if False else (None)))
+        p_true_probe = ProbeRuntime(args.probe_path).predict(row_feats) if False else (ProbeRuntime(args.probe_path).predict(row_feats) if False else (ProbeRuntime(args.probe_path).predict(row_feats) if False else (None)))
         # keep original behavior:
-        p_true_probe = ProbeRuntime(args.probe_path).predict(
-            row_feats) if False else (probe.predict(row_feats) if probe else None)
+        p_true_probe = ProbeRuntime(args.probe_path).predict(row_feats) if False else (probe.predict(row_feats) if probe else None)
         rows[-1]["p_true_probe"] = p_true_probe
 
     overall_metrics = evaluate_batch(preds, refs)
@@ -784,7 +783,7 @@ if __name__ == "__main__":
     ap.add_argument("--dataset", type=str, default=None,
                     help="Override dataset name (triviaqa | squad | squad_v2 | nq_open | hotpot_qa)")
     ap.add_argument("--split", type=str, default=None,
-                    help="Override split (train | validation)")
+                    help="Override split (train | validation | test)")
     ap.add_argument("--limit", type=int, default=None, help="override dataset size")
     ap.add_argument("--save_jsonl", type=str, default=None, help="path for per-example outputs")
     ap.add_argument("--verbose", action="store_true", default=True)
@@ -813,15 +812,15 @@ if __name__ == "__main__":
     ap.add_argument("--num_shards", type=int, default=1, help="for distributed eval (slurm)")
     ap.add_argument("--shard_id", type=int, default=0, help="shard index for distributed eval (slurm)")
 
-    ap.add_argument("--probe_path", type=str, default=None,
-                    help="Optional path to a trained verifier probe")
+    # NEW: probe path (used in main)
+    ap.add_argument("--probe_path", type=str, default=None, help="Optional path to a trained verifier probe")
 
-    # NEW: training-only supplement
+    # NEW: training/validation supplement controls
     ap.add_argument("--supplementary_data", type=str, default=None,
-                    help="Path to a TriviaQA-like JSONL to append/use for TRAIN "
-                         "(e.g., src/data/supplementary_data.jsonl)")
+                    help="Path to a TriviaQA-like JSONL to append/use for ANY split "
+                         "(e.g., src/data/supplementary_data.jsonl). Pass empty string \"\" to force-disable auto-pickup.")
     ap.add_argument("--supplementary_only", action="store_true", default=False,
-                    help="Use only the supplementary JSONL for TRAIN (no base dataset)")
+                    help="Use only the supplementary JSONL for the selected split (no base dataset)")
 
     args = ap.parse_args()
     cfg = Cfg.load(args.config)

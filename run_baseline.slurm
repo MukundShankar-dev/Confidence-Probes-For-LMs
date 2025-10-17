@@ -198,3 +198,6 @@ python -m scripts.run_baseline \
 
 # # Natural Questions Open
 # --dataset nq_open --split validation
+
+
+# python -m scripts.run_baseline --config configs/default.yaml --dataset triviaqa --split validation --backend qwen --model_id "Qwen/Qwen2.5-7B-Instruct" --thinking_mode off --prompt_style fewshot_fixed --max_new_tokens 64 --supplementary_only --supplementary_data src/data/supplementary_data.jsonl --save_jsonl "results/supplementary/qwen/qwen_final.json"
