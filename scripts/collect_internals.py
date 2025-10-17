@@ -204,6 +204,14 @@ def main():
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--num_shards", type=int, default=1)
     ap.add_argument("--shard_id", type=int, default=0)
+
+    # NEW: supplementary controls (same as run_baseline)
+    ap.add_argument("--supplementary_data", type=str, default=None,
+                    help="Path to a TriviaQA-like JSONL to append/use for ANY split "
+                         "(e.g., src/data/supplementary_data.jsonl). Pass empty string \"\" to force-disable auto-pickup.")
+    ap.add_argument("--supplementary_only", action="store_true", default=False,
+                    help="Use only the supplementary JSONL for the selected split (no base dataset)")
+
     # model
     ap.add_argument("--backend", choices=["gpt", "qwen", "gemma", "llama31", "llama32"], default="llama31")
     ap.add_argument("--model_id", type=str, default=None)
@@ -216,15 +224,33 @@ def main():
     hf_logging.set_verbosity_info()
     hf_logging.enable_propagation()
 
-    # ---- load dataset ----
-    ds = load_qa(args.dataset, args.split, args.limit)
+    # ---- resolve supplementary path (auto-pickup, with explicit disable) ----
+    supp = args.supplementary_data
+    auto_pick = True
+    if isinstance(supp, str) and supp.strip() == "":
+        supp = None
+        auto_pick = False
+    if supp is None and auto_pick:
+        default_path = "src/data/supplementary_data.jsonl"
+        if os.path.exists(default_path):
+            supp = default_path
+
+    # ---- load dataset (supplement supported on ANY split) ----
+    ds = load_qa(
+        args.dataset,
+        args.split,
+        args.limit,
+        supplementary_data=supp,
+        supplementary_only=args.supplementary_only,
+    )
+
+    # Shard AFTER merge/selection so supplement is evenly distributed too
     if args.num_shards > 1:
         ds = ds.shard(num_shards=args.num_shards, index=args.shard_id, contiguous=True)
         print(f"[shard] Using shard {args.shard_id}/{args.num_shards} with {len(ds)} examples")
 
     # ---- model init ----
     if args.backend == "gpt":
-        # You likely don't use this branch for OSS runs; included for completeness
         model = GPTOSS(
             model_id=args.model_id,
             dtype="float16",

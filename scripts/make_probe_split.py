@@ -8,6 +8,22 @@ import random
 import re
 from typing import Dict, List, Tuple, Iterable
 
+"""
+Script to pool probe JSONL files from multiple datasets/backends,
+and create stratified train/val/test splits both globally and per-backend.
+
+Example usage:
+
+python -m scripts.make_probe_split \
+  --root data/probe \
+  --out_dir data/probe_splits_80_10_10 \
+  --train_frac 0.80 \
+  --val_frac 0.10 \
+  --test_frac 0.10 \
+  --use_supplementary append
+
+"""
+
 
 def infer_dataset_backend(path: str) -> Tuple[str, str]:
     """
@@ -86,6 +102,7 @@ def stratified_split(
 
 
 def write_jsonl(path: str, rows: List[dict], indices: List[int]):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as w:
         for i in indices:
             w.write(json.dumps(rows[i], ensure_ascii=False) + "\n")
@@ -143,6 +160,20 @@ def main():
     ap.add_argument("--no_tag_from_path", action="store_true",
                     help="Do NOT fill dataset/backend from directory names if missing")
     ap.add_argument("--skip_global", action="store_true", help="Do not write the pooled (all backends) split")
+
+    # NEW: supplementary control
+    ap.add_argument("--use_supplementary", choices=["append", "off", "only"], default="append",
+                    help="How to handle rows from the supplementary dataset folder")
+    ap.add_argument("--supplementary_dataset_name", type=str, default="supplementary",
+                    help="Folder name used for supplementary under data/probe/<name>/...")
+
+    # Optional: include/exclude datasets (by folder name) for finer control
+    ap.add_argument("--datasets", type=str, default=None,
+                    help="Comma-separated allowlist of dataset names to include (e.g., 'triviaqa,hotpot_qa,squad_v2,supplementary'). "
+                         "If unset, include all discovered (subject to --use_supplementary).")
+    ap.add_argument("--exclude_datasets", type=str, default=None,
+                    help="Comma-separated blocklist of dataset names to exclude.")
+
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -155,6 +186,31 @@ def main():
     all_rows = pool_rows(files, tag_from_path=not args.no_tag_from_path)
     if not all_rows:
         raise SystemExit("No rows found after filtering (only 'overall' records?)")
+
+    # 1b) Filter by supplementary policy
+    supp_name = args.supplementary_dataset_name
+    def _is_supp(r: dict) -> bool:
+        return str(r.get("dataset", "")).lower() == supp_name.lower()
+
+    if args.use_supplementary == "off":
+        all_rows = [r for r in all_rows if not _is_supp(r)]
+    elif args.use_supplementary == "only":
+        all_rows = [r for r in all_rows if _is_supp(r)]
+    # else "append": keep everything
+
+    if not all_rows:
+        raise SystemExit("No rows remain after applying --use_supplementary filter.")
+
+    # 1c) Dataset allow/block lists
+    if args.datasets:
+        allow = {x.strip().lower() for x in args.datasets.split(",") if x.strip()}
+        all_rows = [r for r in all_rows if str(r.get("dataset", "")).lower() in allow]
+    if args.exclude_datasets:
+        block = {x.strip().lower() for x in args.exclude_datasets.split(",") if x.strip()}
+        all_rows = [r for r in all_rows if str(r.get("dataset", "")).lower() not in block]
+
+    if not all_rows:
+        raise SystemExit("No rows remain after applying dataset include/exclude filters.")
 
     # 2) Collect per-backend subsets
     by_backend: Dict[str, List[dict]] = {}
