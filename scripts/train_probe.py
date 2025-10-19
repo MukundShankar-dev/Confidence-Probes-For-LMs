@@ -1,7 +1,19 @@
-# train_probe.py
+# scripts/train_probe.py
 # Multi-probe trainer with plots and artifacts.
 # Transformer probe: per-token projections, token-type embeddings, CLS pooling,
 # stochastic depth, attention dumps, and SAFE calibration with debug plots.
+
+"""
+    Usage:
+    python -m scripts.train_probe \
+        --data_dir data/probe_splits_80_10_10 \
+        --models llama,qwen \
+        --probe_type all \
+        --use_hidden \
+        --use_supplementary append
+
+"""
+
 
 import argparse, json, pickle
 from pathlib import Path
@@ -93,9 +105,6 @@ def build_df(rows, use_hidden=True, label_key="em"):
                 if vec is not None:
                     for j, v in enumerate(vec):
                         x[f"{name}_{j}"] = float(v)
-                else:
-                    # leave missing; detect and drop for xform dynamically
-                    pass
         feats.append(x)
         labels.append(int(r.get(label_key, 0)))
         ids.append(r.get("idx", i))
@@ -642,6 +651,38 @@ def plot_curves(model_dir: Path, split_name: str, y, proba):
 
 # ------------------------ Train/eval orchestration ------------------------
 
+def _filter_rows_by_policy(rows, use_supp: str, supp_name: str,
+                           include_ds=None, exclude_ds=None, split_label=""):
+    """Apply supplementary and dataset include/exclude policy to a list of rows."""
+    def is_supp(r):
+        return str(r.get("dataset", "")).lower() == supp_name.lower()
+
+    filtered = rows
+    if use_supp == "off":
+        filtered = [r for r in filtered if not is_supp(r)]
+    elif use_supp == "only":
+        filtered = [r for r in filtered if is_supp(r)]
+    # else append: keep all
+
+    if include_ds:
+        allow = {x.strip().lower() for x in include_ds.split(",") if x.strip()}
+        filtered = [r for r in filtered if str(r.get("dataset", "")).lower() in allow]
+
+    if exclude_ds:
+        block = {x.strip().lower() for x in exclude_ds.split(",") if x.strip()}
+        filtered = [r for r in filtered if str(r.get("dataset", "")).lower() not in block]
+
+    if split_label:
+        from collections import Counter
+        c = Counter([str(r.get("dataset", "")).lower() for r in filtered])
+        if c:
+            print(f"[data] {split_label}: total={len(filtered)}  by-dataset={dict(sorted(c.items(), key=lambda kv: -kv[1]))}")
+        else:
+            print(f"[data] {split_label}: total=0")
+
+    return filtered
+
+
 def fit_and_eval_probe(probe_type: str, X_tr, y_tr, X_va, y_va, X_te, y_te,
                        use_hidden, out_root: Path,
                        random_state=7,
@@ -777,7 +818,7 @@ def main():
     parser.add_argument("--models", type=str, default="llama,qwen", help="comma-separated: llama,qwen")
     parser.add_argument("--use_hidden", action="store_true", help="include 4x256 hidden vectors")
     parser.add_argument("--label_key", type=str, default="em")
-    parser.add_argument("--out_dir", type=str, default=None, help="save dir (default: <data_dir>/probe_models)")
+    parser.add_argument("--out_dir", type=str, default=".", help="save dir (default: <data_dir>/probe_models)")
     parser.add_argument("--probe_type", type=str, default="mlp",
                         choices=["mlp", "logreg", "logreg_cal", "tree", "xform", "all"])
 
@@ -807,6 +848,17 @@ def main():
                         help="which split to use for averaging attention (default: val; falls back if missing)")
     parser.add_argument("--xform_attn_batches", type=int, default=8,
                         help="number of minibatches to average for attention maps")
+
+    # ===== NEW: supplementary and dataset filters =====
+    parser.add_argument("--use_supplementary", choices=["append", "off", "only"], default="append",
+                        help="How to handle rows with dataset == supplementary")
+    parser.add_argument("--supplementary_dataset_name", type=str, default="supplementary",
+                        help="Dataset name used for supplementary rows (as tagged in make_probe_split)")
+    parser.add_argument("--datasets", type=str, default=None,
+                        help="Comma-separated allowlist of dataset names to include (after supp policy)")
+    parser.add_argument("--exclude_datasets", type=str, default=None,
+                        help="Comma-separated blocklist of dataset names to exclude (after supp policy)")
+
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir).expanduser()
@@ -828,8 +880,25 @@ def main():
         rows_val   = load_rows(split_files.get("val"))
         rows_test  = load_rows(split_files.get("test"))
 
+        # ---- Apply supplementary / dataset policy (no upsampling) ----
+        rows_train = _filter_rows_by_policy(rows_train, args.use_supplementary,
+                                            args.supplementary_dataset_name,
+                                            include_ds=args.datasets,
+                                            exclude_ds=args.exclude_datasets,
+                                            split_label="train")
+        rows_val   = _filter_rows_by_policy(rows_val, args.use_supplementary,
+                                            args.supplementary_dataset_name,
+                                            include_ds=args.datasets,
+                                            exclude_ds=args.exclude_datasets,
+                                            split_label="val") if rows_val else []
+        rows_test  = _filter_rows_by_policy(rows_test, args.use_supplementary,
+                                            args.supplementary_dataset_name,
+                                            include_ds=args.datasets,
+                                            exclude_ds=args.exclude_datasets,
+                                            split_label="test") if rows_test else []
+
         if not rows_train:
-            print(f"[WARN] backend_{mk}: missing or empty train split; skipping")
+            print(f"[WARN] backend_{mk}: empty train split after filtering; skipping")
             continue
 
         df_tr, y_tr, _ = build_df(rows_train, use_hidden=args.use_hidden, label_key=args.label_key)
@@ -855,7 +924,8 @@ def main():
 
         probe_types = ["mlp", "logreg", "logreg_cal", "tree", "xform"] if args.probe_type == "all" else [args.probe_type]
         for pt in probe_types:
-            print(f"\n[train] backend_{mk} | probe_type={pt} | use_hidden={args.use_hidden}")
+            print(f"\n[train] backend_{mk} | probe_type={pt} | use_hidden={args.use_hidden} "
+                  f"| supp={args.use_supplementary} | supp_name={args.supplementary_dataset_name}")
             result = fit_and_eval_probe(
                 pt, df_tr, y_tr, df_va, y_va, df_te, y_te,
                 use_hidden=args.use_hidden,
