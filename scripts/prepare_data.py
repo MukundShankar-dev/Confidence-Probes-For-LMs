@@ -42,6 +42,8 @@ SUPPORTED = {
     "squad_v2": ("squad_v2", None),
     "squad2": ("squad_v2", None),
     "nq_open": ("nq_open", None),
+    "gsm8k": ("gsm8k", "main"),
+    "mmlu": ("cais/mmlu", "all"),
     # if you ever want full NQ, uncomment next line (heavier, noisier)
     # "natural_questions": ("natural_questions", None),
 }
