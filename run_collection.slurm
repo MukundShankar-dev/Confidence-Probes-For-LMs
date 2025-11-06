@@ -26,8 +26,7 @@ python -m scripts.collect_internals \
   --dataset triviaqa --split validation \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe/triviaqa/qwen/qwen_final_only_shard${shard_id}.jsonl \
-  --supplementary_data ""
+  --out data/probe/triviaqa/qwen/qwen_final_only_shard${shard_id}.jsonl
 
 # python -m scripts.collect_internals \
 #   --backend gemma \
@@ -35,8 +34,7 @@ python -m scripts.collect_internals \
 #   --dataset triviaqa --split validation \
 #   --max_new_tokens 64 \
 #   --num_shards "$num_shards" --shard_id "$shard_id" \
-#   --out data/probe/triviaqa/gemma/gemma_final_only_shard${shard_id}.jsonl \
-#   --supplementary_data ""
+#   --out data/probe/triviaqa/gemma/gemma_final_only_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend llama31 \
@@ -44,8 +42,7 @@ python -m scripts.collect_internals \
   --dataset triviaqa --split validation \
   --max_new_tokens 64 \
   --num_shards $num_shards --shard_id $shard_id \
-  --out data/probe/triviaqa/llama31/llama31_final_only_shard${shard_id}.jsonl \
-  --supplementary_data ""
+  --out data/probe/triviaqa/llama31/llama31_final_only_shard${shard_id}.jsonl
 
 # === HOTPOTQA EXPERIMENTS ===
 
@@ -55,8 +52,7 @@ python -m scripts.collect_internals \
   --dataset hotpot_qa --split validation \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe/hotpotqa/qwen/qwen_final_only_shard${shard_id}.jsonl \
-  --supplementary_data ""
+  --out data/probe/hotpotqa/qwen/qwen_final_only_shard${shard_id}.jsonl
 
 # python -m scripts.collect_internals \
 #   --backend gemma \
@@ -64,8 +60,7 @@ python -m scripts.collect_internals \
 #   --dataset hotpot_qa --split validation \
 #   --max_new_tokens 64 \
 #   --num_shards "$num_shards" --shard_id "$shard_id" \
-#   --out data/probe/hotpotqa/gemma/gemma_final_only_shard${shard_id}.jsonl \
-#   --supplementary_data ""
+#   --out data/probe/hotpotqa/gemma/gemma_final_only_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend llama31 \
@@ -73,8 +68,7 @@ python -m scripts.collect_internals \
   --dataset hotpot_qa --split validation \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe/hotpotqa/llama31/llama31_final_only_shard${shard_id}.jsonl \
-  --supplementary_data ""
+  --out data/probe/hotpotqa/llama31/llama31_final_only_shard${shard_id}.jsonl
 
 # === SQuADv2 EXPERIMENTS ===
 
@@ -84,8 +78,7 @@ python -m scripts.collect_internals \
   --dataset squad_v2 --split validation \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe/squadv2/qwen/qwen_final_only_shard${shard_id}.jsonl \
-  --supplementary_data ""
+  --out data/probe/squadv2/qwen/qwen_final_only_shard${shard_id}.jsonl
 
 # python -m scripts.collect_internals \
 #   --backend gemma \
@@ -93,8 +86,7 @@ python -m scripts.collect_internals \
 #   --dataset squad_v2 --split validation \
 #   --max_new_tokens 64 \
 #   --num_shards "$num_shards" --shard_id "$shard_id" \
-#   --out data/probe/squadv2/gemma/gemma_final_only_shard${shard_id}.jsonl \
-#   --supplementary_data ""
+#   --out data/probe/squadv2/gemma/gemma_final_only_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend llama31 \
@@ -102,46 +94,63 @@ python -m scripts.collect_internals \
   --dataset squad_v2 --split validation \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe/squadv2/llama31/llama31_final_only_shard${shard_id}.jsonl \
-  --supplementary_data ""
+  --out data/probe/squadv2/llama31/llama31_final_only_shard${shard_id}.jsonl
 
-# === SUPPLEMENTARY DATA ===
-python -m scripts.collect_internals \
-  --backend llama31 \
-  --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
-  --dataset triviaqa --split validation \
-  --max_new_tokens 64 \
-  --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe/supplementary/llama31/llama31_final_only_shard${shard_id}.jsonl \
-  --supplementary_only \
-  --supplementary_data src/data/supplementary_data.jsonl
-
+# === GSM8K EXPERIMENTS ===
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-7B-Instruct" \
-  --dataset triviaqa --split validation \
+  --dataset gsm8k --split test \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe/supplementary/qwen/qwen_final_only_shard${shard_id}.jsonl \
-  --supplementary_only \
-  --supplementary_data src/data/supplementary_data.jsonl
+  --out data/probe/gsm8k/qwen/qwen_final_only_shard${shard_id}.jsonl
 
+python -m scripts.collect_internals \
+  --backend llama31 \
+  --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --dataset gsm8k --split test \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" --shard_id "$shard_id" \
+  --out data/probe/gsm8k/llama31/llama31_final_only_shard${shard_id}.jsonl
+
+# === MMLU EXPERIMENTS ===
+python -m scripts.collect_internals \
+  --backend qwen \
+  --model_id "Qwen/Qwen2.5-7B-Instruct" \
+  --dataset mmlu --split test \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" --shard_id "$shard_id" \
+  --out data/probe/mmlu/qwen/qwen_final_only_shard${shard_id}.jsonl
+
+python -m scripts.collect_internals \
+  --backend llama31 \
+  --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --dataset mmlu --split test \
+  --max_new_tokens 64 \
+  --num_shards "$num_shards" --shard_id "$shard_id" \
+  --out data/probe/mmlu/llama31/llama31_final_only_shard${shard_id}.jsonl
 
 # DATASET OPTIONS:
 # # TriviaQA (unfiltered), validation split
 # --dataset triviaqa --split validation
 
-# # HotpotQA (distractor), train split
-# --dataset hotpot_qa --split train
+# # HotpotQA (distractor), validation split
+# --dataset hotpot_qa --split validation
 
-# # SQuAD v1.1
+# # SQuAD v1.1, validation split
 # --dataset squad --split validation
 
-# # SQuAD v2.0
+# # SQuAD v2.0, validation split
 # --dataset squad_v2 --split validation
 
-# # Natural Questions Open
+# # Natural Questions Open, validation split
 # --dataset nq_open --split validation
+
+# # GSM8K, test split (no validation split available)
+# --dataset gsm8k --split test
+
+# # MMLU, test or validation split
+# --dataset mmlu --split test
 
 # python -m scripts.make_probe_split \
 #   --root data/probe \
