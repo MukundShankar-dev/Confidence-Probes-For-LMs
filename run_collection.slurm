@@ -113,11 +113,11 @@ python -m scripts.collect_internals \
   --num_shards "$num_shards" --shard_id "$shard_id" \
   --out data/probe/gsm8k/llama31/llama31_final_only_shard${shard_id}.jsonl
 
-# === MMLU EXPERIMENTS ===
+# === validation EXPERIMENTS ===
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-7B-Instruct" \
-  --dataset mmlu --split test \
+  --dataset mmlu --split validation \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
   --out data/probe/mmlu/qwen/qwen_final_only_shard${shard_id}.jsonl
@@ -125,7 +125,7 @@ python -m scripts.collect_internals \
 python -m scripts.collect_internals \
   --backend llama31 \
   --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
-  --dataset mmlu --split test \
+  --dataset mmlu --split validation \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
   --out data/probe/mmlu/llama31/llama31_final_only_shard${shard_id}.jsonl
