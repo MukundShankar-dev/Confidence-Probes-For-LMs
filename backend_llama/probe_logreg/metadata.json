@@ -1,0 +1,25 @@
+{
+  "probe_type": "logreg",
+  "use_hidden": true,
+  "feature_names_path": "backend_llama/probe_logreg/feature_names.json",
+  "model_path": "backend_llama/probe_logreg/probe_model.joblib",
+  "pred_paths": {
+    "train": "backend_llama/probe_logreg/pred_train.csv",
+    "val": "backend_llama/probe_logreg/pred_val.csv",
+    "test": "backend_llama/probe_logreg/pred_test.csv"
+  },
+  "plots": {
+    "train": {
+      "roc": "backend_llama/probe_logreg/roc_train.png",
+      "pr": "backend_llama/probe_logreg/pr_train.png"
+    },
+    "val": {
+      "roc": "backend_llama/probe_logreg/roc_val.png",
+      "pr": "backend_llama/probe_logreg/pr_val.png"
+    },
+    "test": {
+      "roc": "backend_llama/probe_logreg/roc_test.png",
+      "pr": "backend_llama/probe_logreg/pr_test.png"
+    }
+  }
+}

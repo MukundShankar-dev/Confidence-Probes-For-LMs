@@ -130,8 +130,6 @@ def load_qa(
     name: str,
     split: str,
     limit: int,
-    supplementary_data: Optional[str] = None,
-    supplementary_only: bool = False,
 ):
     """
     Return a HuggingFace Dataset where each example is a dict:
@@ -144,29 +142,9 @@ def load_qa(
       - "nq_open"      -> huggingface 'nq_open'
       - "triviaqa"     -> huggingface 'trivia_qa' (unfiltered)
       - "hotpotqa"/"hotpot_qa" -> huggingface 'hotpot_qa' ('distractor' config)
-
-    Supplement handling:
-      - If `supplementary_only` is True, return ONLY the supplementary JSONL on the requested split.
-      - If `supplementary_data` is provided, append it to the loaded split (train/validation/test).
-      - If neither flag is set, no supplementary examples are used.
+      - "gsm8k"        -> huggingface 'gsm8k' (main config, math reasoning)
+      - "mmlu"         -> huggingface 'cais/mmlu' (all subjects, multiple choice)
     """
-
-    # ---- supplementary-only short-circuit (works on any split) ----
-    if supplementary_only:
-        if not supplementary_data:
-            # try project default
-            default_path = "src/data/supplementary_data.jsonl"
-            if os.path.exists(default_path):
-                supplementary_data = default_path
-        if not supplementary_data or not os.path.exists(supplementary_data):
-            raise FileNotFoundError(
-                "Supplementary JSONL not found. Pass --supplementary_data "
-                "or place it at src/data/supplementary_data.jsonl"
-            )
-        ds = _load_supplementary_jsonl(supplementary_data)
-        if limit:
-            ds = ds.select(range(min(limit, len(ds))))
-        return ds
 
     # ---- main dataset ----
     if name == "squad":
@@ -230,18 +208,59 @@ def load_qa(
             }
         ds = ds.map(_fmt, remove_columns=ds.column_names)
 
+    elif name in {"gsm8k"}:
+        # GSM8K math reasoning dataset
+        ds = load_dataset("gsm8k", "main", split=split)
+        def _fmt(ex):
+            # Answer format: "#### 42" at the end of the solution
+            answer_text = ex.get("answer", "")
+            # Extract the final numerical answer after "####"
+            if "####" in answer_text:
+                final_answer = answer_text.split("####")[-1].strip()
+            else:
+                final_answer = answer_text.strip()
+            return {
+                "question": ex.get("question", ""),
+                "answers": _dedupe_nonempty([final_answer]),
+                "context": "",
+            }
+        ds = ds.map(_fmt, remove_columns=ds.column_names)
+
+    elif name in {"mmlu"}:
+        # MMLU multiple-choice dataset
+        ds = load_dataset("cais/mmlu", "all", split=split)
+        def _fmt(ex):
+            # MMLU format: question, choices (A/B/C/D), answer (index 0-3)
+            question = ex.get("question", "")
+            choices = ex.get("choices", [])
+            answer_idx = ex.get("answer", 0)
+            
+            # Format question with choices
+            if choices:
+                choices_text = "\n".join([f"{chr(65+i)}. {choice}" for i, choice in enumerate(choices)])
+                full_question = f"{question}\n{choices_text}"
+            else:
+                full_question = question
+            
+            # Get correct answer (both letter and text)
+            if 0 <= answer_idx < len(choices):
+                answer_letter = chr(65 + answer_idx)  # A, B, C, or D
+                answer_text = choices[answer_idx]
+                answers = [answer_letter, answer_text, f"{answer_letter}. {answer_text}"]
+            else:
+                answers = ["A"]  # fallback
+            
+            return {
+                "question": full_question,
+                "answers": _dedupe_nonempty(answers),
+                "context": "",
+            }
+        ds = ds.map(_fmt, remove_columns=ds.column_names)
+
     else:
         raise ValueError(f"Unknown dataset {name}")
 
-    # ---- optional supplementary (append to ANY split when provided) ----
-    if supplementary_data:
-        if not os.path.exists(supplementary_data):
-            raise FileNotFoundError(
-                f"Supplementary JSONL not found: {supplementary_data}")
-        supp_ds = _load_supplementary_jsonl(supplementary_data)
-        ds = concatenate_datasets([ds, supp_ds])
-
-    # ---- limit AFTER merge ----
+    # ---- limit ----
     if limit:
         ds = ds.select(range(min(limit, len(ds))))
     return ds

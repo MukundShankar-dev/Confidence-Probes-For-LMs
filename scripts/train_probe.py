@@ -142,7 +142,11 @@ def make_pipeline_logreg():
         ("impute", SimpleImputer(strategy="median")),
         ("scale",  StandardScaler(with_mean=True, with_std=True)),
         ("clf",    LogisticRegression(
-            penalty="l2", C=1.0, solver="lbfgs", max_iter=1000
+            penalty="l2",
+            C=1.0,
+            solver="lbfgs",
+            max_iter=1000,
+            # class_weight="balanced"
         ))
     ])
 

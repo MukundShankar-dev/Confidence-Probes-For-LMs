@@ -4,7 +4,8 @@
 Demo script for running LLM inference with probe predictions
 
 Example usage:
-    python -m scripts.demo --model llama31 --probe_dir probes/backend_llama/probe_mlp --use_hidden --interactive
+    python -m scripts.demo --model llama31 --probe_dir backend_llama/probe_mlp --use_hidden --interactive
+    python -m scripts.demo --model qwen --probe_dir backend_qwen/probe_mlp --use_hidden --interactive
 
 """
 import argparse
@@ -33,6 +34,11 @@ try:
     torch.set_float32_matmul_precision("high")
 except Exception:
     pass
+
+OPTIMAL_THRESHOLDS = {
+    "llama31": {"mlp": 0.359, "logreg": 0.332, "logreg_cal": 0.368, "tree": 0.179, "xform": 0.227},
+    "qwen": {"mlp": 0.353, "logreg": 0.293, "logreg_cal": 0.372, "tree": 0.228, "xform": 0.264}
+}
 
 # Prompts (identical to collect_internals.py)
 FEWSHOT_PROMPT = """You are answering trivia questions.
@@ -522,7 +528,7 @@ SCALAR_KEYS = [
 ]
 VECTOR_KEYS = ["h_last_256", "h_pool_256", "h_last_mid_256", "h_pool_mid_256"]
 
-def load_probe(probe_dir: str, use_hidden: bool = True):
+def load_probe(probe_dir: str, use_hidden: bool = True, model_name: str = None):
     """Load a trained probe from directory"""
     probe_path = Path(probe_dir)
     
@@ -545,6 +551,12 @@ def load_probe(probe_dir: str, use_hidden: bool = True):
             probe_type = "mlp"  # Default
     
     print(f"[Probe] Loading {probe_type} probe from {probe_dir}")
+
+    threshold = None
+    if model_name and model_name in OPTIMAL_THRESHOLDS:
+        threshold = OPTIMAL_THRESHOLDS[model_name].get(probe_type)
+        if threshold:
+            print(f"[Probe] Using optimal F1 threshold: {threshold:.3f}")
     
     if probe_type == "xform":
         # Load transformer probe
@@ -608,7 +620,7 @@ def main():
     probe = None
     if args.probe_dir:
         try:
-            probe = load_probe(args.probe_dir, args.use_hidden)
+            probe = load_probe(args.probe_dir, args.use_hidden, model_name=args.model)
             print(f"[Probe] Successfully loaded {probe['type']} probe")
             print(f"[Probe] Use hidden states: {probe['use_hidden']}")
         except Exception as e:
@@ -644,7 +656,11 @@ def main():
             print(f"Answer: {result['answer']}")
             print(f"Model confidence: {result['model_confidence']}")
             if probe_prob is not None:
-                print(f"Probe P(correct): {probe_prob:.3f}")
+                threshold = probe.get("threshold", 0.5)
+                verdict = "Likely Correct" if probe_prob >= threshold else "Likely Incorrect"
+                
+                print(f"[Probe] P(correct): {probe_prob:.3f}")
+                print(f"[Probe] Verdict (threshold {threshold:.3f}): {verdict}")
                 # Compare with model confidence
                 if result['model_confidence'] is not None:
                     diff = probe_prob - result['model_confidence']
