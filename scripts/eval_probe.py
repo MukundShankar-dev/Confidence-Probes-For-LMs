@@ -402,7 +402,15 @@ def evaluate_on_dataset(model, probe, dataset_name: str, limit: int = None):
     
     results = []
     
-    for idx, ex in enumerate(tqdm(ds, desc=f"Evaluating {dataset_name}")):
+    # Disable tqdm in non-interactive environments (like SLURM)
+    import sys
+    disable_tqdm = not sys.stdout.isatty()
+    
+    for idx, ex in enumerate(tqdm(ds, desc=f"Evaluating {dataset_name}", disable=disable_tqdm)):
+        # Print progress manually if tqdm is disabled
+        if disable_tqdm and (idx + 1) % 100 == 0:
+            print(f"[{dataset_name}] Processed {idx + 1}/{len(ds)} examples")
+        
         question = ex["question"]
         gold_answers = ex["answers"]
         
