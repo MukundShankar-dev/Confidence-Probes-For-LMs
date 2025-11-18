@@ -228,7 +228,11 @@ def load_qa(
 
     elif name in {"mmlu"}:
         # MMLU multiple-choice dataset
-        ds = load_dataset("cais/mmlu", "all", split=split)
+        if split == "train":
+            mmlu_split = "auxiliary_train"
+        else:
+            mmlu_split = split
+        ds = load_dataset("cais/mmlu", "all", split=mmlu_split)
         def _fmt(ex):
             # MMLU format: question, choices (A/B/C/D), answer (index 0-3)
             question = ex.get("question", "")

@@ -14,18 +14,6 @@ set -euo pipefail
 
 source ~/.bashrc
 
-# cd /vulcanscratch/mukunds/downloads/
-# rm -rf easi3r_project
-# rm -rf /vulcanscratch/mukunds/anaconda3/envs/wham
-# conda env remove --name T_CORE
-# conda env remove --name cotracker
-# conda env remove --name easi3r
-# conda env remove --name sam2
-# conda env remove --name smpl
-# conda env remove --name temos
-# conda env remove --name tmr
-# conda env remove --name vidseg
-
 conda activate llm
 export PYTHONUNBUFFERED=1
 reasoning=medium

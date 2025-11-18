@@ -8,7 +8,7 @@
 #SBATCH --time=6:00:00
 #SBATCH -o logs/%x_%A_%a.out
 #SBATCH -e logs/%x_%A_%a.err
-#SBATCH --array=0-49
+#SBATCH --array=0-99
 
 set -euo pipefail
 source ~/.bashrc
@@ -23,7 +23,7 @@ shard_id=$SLURM_ARRAY_TASK_ID
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-7B-Instruct" \
-  --dataset triviaqa --split validation \
+  --dataset triviaqa --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
   --out data/probe/triviaqa/qwen/qwen_final_only_shard${shard_id}.jsonl
@@ -39,7 +39,7 @@ python -m scripts.collect_internals \
 python -m scripts.collect_internals \
   --backend llama31 \
   --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
-  --dataset triviaqa --split validation \
+  --dataset triviaqa --split train \
   --max_new_tokens 64 \
   --num_shards $num_shards --shard_id $shard_id \
   --out data/probe/triviaqa/llama31/llama31_final_only_shard${shard_id}.jsonl
@@ -49,7 +49,7 @@ python -m scripts.collect_internals \
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-7B-Instruct" \
-  --dataset hotpot_qa --split validation \
+  --dataset hotpot_qa --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
   --out data/probe/hotpotqa/qwen/qwen_final_only_shard${shard_id}.jsonl
@@ -65,7 +65,7 @@ python -m scripts.collect_internals \
 python -m scripts.collect_internals \
   --backend llama31 \
   --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
-  --dataset hotpot_qa --split validation \
+  --dataset hotpot_qa --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
   --out data/probe/hotpotqa/llama31/llama31_final_only_shard${shard_id}.jsonl
@@ -75,7 +75,7 @@ python -m scripts.collect_internals \
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-7B-Instruct" \
-  --dataset squad_v2 --split validation \
+  --dataset squad_v2 --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
   --out data/probe/squadv2/qwen/qwen_final_only_shard${shard_id}.jsonl
@@ -91,7 +91,7 @@ python -m scripts.collect_internals \
 python -m scripts.collect_internals \
   --backend llama31 \
   --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
-  --dataset squad_v2 --split validation \
+  --dataset squad_v2 --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
   --out data/probe/squadv2/llama31/llama31_final_only_shard${shard_id}.jsonl
@@ -100,7 +100,7 @@ python -m scripts.collect_internals \
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-7B-Instruct" \
-  --dataset gsm8k --split test \
+  --dataset gsm8k --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
   --out data/probe/gsm8k/qwen/qwen_final_only_shard${shard_id}.jsonl
@@ -108,7 +108,7 @@ python -m scripts.collect_internals \
 python -m scripts.collect_internals \
   --backend llama31 \
   --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
-  --dataset gsm8k --split test \
+  --dataset gsm8k --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
   --out data/probe/gsm8k/llama31/llama31_final_only_shard${shard_id}.jsonl
@@ -117,7 +117,7 @@ python -m scripts.collect_internals \
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-7B-Instruct" \
-  --dataset mmlu --split validation \
+  --dataset mmlu --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
   --out data/probe/mmlu/qwen/qwen_final_only_shard${shard_id}.jsonl
@@ -125,7 +125,7 @@ python -m scripts.collect_internals \
 python -m scripts.collect_internals \
   --backend llama31 \
   --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
-  --dataset mmlu --split validation \
+  --dataset mmlu --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
   --out data/probe/mmlu/llama31/llama31_final_only_shard${shard_id}.jsonl
