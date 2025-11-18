@@ -1,0 +1,21 @@
+{
+  "model": "qwen",
+  "probe_dir": "backend_qwen/probe_mlp",
+  "use_hidden": true,
+  "datasets": [
+    {
+      "dataset": "triviaqa",
+      "n_examples": 10832,
+      "model_accuracy": 0.0,
+      "probe_accuracy": 0.5758862629246676,
+      "probe_precision": 0.0,
+      "probe_recall": 0.0,
+      "probe_f1": 0.0,
+      "tp": 0,
+      "fp": 4594,
+      "tn": 6238,
+      "fn": 0,
+      "threshold": 0.319
+    }
+  ]
+}
