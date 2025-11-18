@@ -36,8 +36,20 @@ except Exception:
     pass
 
 OPTIMAL_THRESHOLDS = {
-    "llama31": {"mlp": 0.359, "logreg": 0.332, "logreg_cal": 0.368, "tree": 0.179, "xform": 0.227},
-    "qwen": {"mlp": 0.353, "logreg": 0.293, "logreg_cal": 0.372, "tree": 0.228, "xform": 0.264}
+    "llama31": {
+        "mlp": 0.323,
+        "logreg": 0.304,
+        "logreg_cal": 0.308,
+        "tree": 0.210,
+        "xform": 0.243,
+    },
+    "qwen": {
+        "mlp": 0.319,
+        "logreg": 0.348,
+        "logreg_cal": 0.365,
+        "tree": 0.146,
+        "xform": 0.335,
+    }
 }
 
 # Prompts (identical to collect_internals.py)

@@ -1,0 +1,25 @@
+{
+  "probe_type": "mlp",
+  "use_hidden": true,
+  "feature_names_path": "backend_llama/probe_mlp/feature_names.json",
+  "model_path": "backend_llama/probe_mlp/probe_model.joblib",
+  "pred_paths": {
+    "train": "backend_llama/probe_mlp/pred_train.csv",
+    "val": "backend_llama/probe_mlp/pred_val.csv",
+    "test": "backend_llama/probe_mlp/pred_test.csv"
+  },
+  "plots": {
+    "train": {
+      "roc": "backend_llama/probe_mlp/roc_train.png",
+      "pr": "backend_llama/probe_mlp/pr_train.png"
+    },
+    "val": {
+      "roc": "backend_llama/probe_mlp/roc_val.png",
+      "pr": "backend_llama/probe_mlp/pr_val.png"
+    },
+    "test": {
+      "roc": "backend_llama/probe_mlp/roc_test.png",
+      "pr": "backend_llama/probe_mlp/pr_test.png"
+    }
+  }
+}
