@@ -5,7 +5,7 @@
 #SBATCH --account=vulcan-abhinav
 #SBATCH --gres=gpu:rtxa5000:1
 #SBATCH --mem=64G
-#SBATCH --time=6:00:00
+#SBATCH --time=24:00:00
 #SBATCH -o logs/%x_%A_%a.out
 #SBATCH -e logs/%x_%A_%a.err
 #SBATCH --array=0-99
