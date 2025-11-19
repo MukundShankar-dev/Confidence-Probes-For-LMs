@@ -18,6 +18,12 @@ import argparse, json, pickle
 from pathlib import Path
 import numpy as np
 import pandas as pd
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+
+console = Console()
 
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -58,10 +64,14 @@ def find_split_files(data_dir: Path, model_key: str):
     return chosen
 
 
-def load_rows(jsonl_path: Path):
+def load_rows(jsonl_path: Path, show_progress=True):
     rows = []
     if not jsonl_path:
         return rows
+    
+    if show_progress:
+        console.print(f"  [dim]Loading {jsonl_path.name}...[/dim]")
+    
     with open(jsonl_path, "r", encoding="utf-8") as f:
         for line in f:
             if line.strip():
@@ -69,6 +79,10 @@ def load_rows(jsonl_path: Path):
                     rows.append(json.loads(line))
                 except Exception:
                     pass
+    
+    if show_progress:
+        console.print(f"  [green]✓[/green] Loaded {len(rows):,} rows from {jsonl_path.name}")
+    
     return rows
 
 
@@ -92,41 +106,73 @@ SCALAR_KEYS = [
 ]
 VECTOR_KEYS = ["h_last_256", "h_pool_256", "h_last_mid_256", "h_pool_mid_256"]
 
-def build_df(rows, use_hidden=True, label_key="em"):
+def build_df(rows, use_hidden=True, label_key="em", show_progress=True):
+    """Build feature dataframe with progress indicator and memory efficiency"""
+    n_rows = len(rows)
+    
+    if show_progress:
+        console.print(f"  [dim]Building feature matrix for {n_rows:,} examples...[/dim]")
+    
+    # Pre-allocate for memory efficiency
     feats, labels, ids = [], [], []
-    for i, r in enumerate(rows):
-        x = {}
-        for k in SCALAR_KEYS:
-            x[k] = r.get(k, np.nan)
-        if use_hidden:
-            for name in VECTOR_KEYS:
-                vec = to_1d(r.get(name))
-                if vec is not None:
-                    for j, v in enumerate(vec):
-                        x[f"{name}_{j}"] = float(v)
-        feats.append(x)
-        labels.append(int(r.get(label_key, 0)))
-        ids.append(r.get("idx", i))
+    
+    # Process in chunks to show progress
+    chunk_size = 10000
+    for chunk_start in range(0, n_rows, chunk_size):
+        chunk_end = min(chunk_start + chunk_size, n_rows)
+        
+        for i in range(chunk_start, chunk_end):
+            r = rows[i]
+            x = {}
+            for k in SCALAR_KEYS:
+                x[k] = r.get(k, np.nan)
+            if use_hidden:
+                for name in VECTOR_KEYS:
+                    vec = to_1d(r.get(name))
+                    if vec is not None:
+                        for j, v in enumerate(vec):
+                            x[f"{name}_{j}"] = float(v)
+            feats.append(x)
+            labels.append(int(r.get(label_key, 0)))
+            ids.append(r.get("idx", i))
+        
+        if show_progress and (chunk_end % 50000 == 0 or chunk_end == n_rows):
+            pct = 100 * chunk_end / n_rows
+            console.print(f"    [green]→[/green] Processed {chunk_end:,}/{n_rows:,} ({pct:.0f}%)")
+    
+    if show_progress:
+        console.print(f"  [dim]Converting to DataFrame...[/dim]")
+    
     df = pd.DataFrame(feats)
     y = np.array(labels, dtype=int)
     ids = np.array(ids)
+    
+    if show_progress:
+        console.print(f"  [green]✓[/green] Feature matrix ready: {df.shape}")
+    
     return df, y, ids
 
 # ------------------------ Classic probe builders ------------------------
 
 def make_pipeline_mlp(use_hidden: bool, random_state: int):
+    # With 332k examples and 64GB RAM limit, use SGD solver for memory efficiency
+    # SGD uses mini-batches instead of loading all data at once
     base = Pipeline([
         ("impute", SimpleImputer(strategy="median")),
         ("scale",  StandardScaler(with_mean=True, with_std=True)),
         ("clf",    MLPClassifier(
-            hidden_layer_sizes=(128,) if use_hidden else (64,),
+            hidden_layer_sizes=(256, 128) if use_hidden else (128, 64),  # 2 layers
             activation="relu",
+            solver="sgd",  # SGD is memory-efficient (mini-batch)
             alpha=1e-4,
-            batch_size=256,
+            batch_size=1024,  # Larger batches for efficiency
+            learning_rate="adaptive",
             learning_rate_init=1e-3,
-            max_iter=60,
+            momentum=0.9,
+            max_iter=50,  # Fewer epochs with SGD
             early_stopping=True,
-            n_iter_no_change=5,
+            validation_fraction=0.1,
+            n_iter_no_change=10,
             random_state=random_state,
             verbose=False,
         )),
@@ -657,6 +703,7 @@ def plot_curves(model_dir: Path, split_name: str, y, proba):
 def fit_and_eval_probe(probe_type: str, X_tr, y_tr, X_va, y_va, X_te, y_te,
                        use_hidden, out_root: Path,
                        random_state=7,
+                       no_calibration=False,  # New parameter
                        # transformer-specific
                        xform_epochs=40, xform_dump_attn=False, xform_attn_split="val",
                        xform_attn_batches=8, xform_lr=1e-3, xform_wd=1e-4,
@@ -670,15 +717,30 @@ def fit_and_eval_probe(probe_type: str, X_tr, y_tr, X_va, y_va, X_te, y_te,
     probe_dir.mkdir(parents=True, exist_ok=True)
 
     if probe_type == "mlp":
+        console.print(f"    [cyan]→ Training MLP (2-layer: 256→128, SGD solver)[/cyan]")
         base = make_pipeline_mlp(use_hidden, random_state)
-        model = make_calibrated(base, len(y_tr))
+        
+        if no_calibration:
+            console.print(f"    [yellow]⚠ Skipping calibration to save memory[/yellow]")
+            model = base
+        else:
+            model = make_calibrated(base, len(y_tr))
+        
+        console.print(f"    [dim]Training on {len(y_tr):,} examples{'with isotonic calibration' if not no_calibration else ''}...[/dim]")
         model.fit(X_tr.values, y_tr)
+        console.print(f"    [green]✓ MLP training completed[/green]")
+        
         saver = lambda: joblib.dump(model, probe_dir / "probe_model.joblib")
         predict_proba = lambda X: model.predict_proba(X.values)[:, 1]
 
     elif probe_type == "logreg":
+        console.print(f"    [cyan]→ Training Logistic Regression[/cyan]")
         model = make_pipeline_logreg()
+        
+        console.print(f"    [dim]Training on {len(y_tr):,} examples...[/dim]")
         model.fit(X_tr.values, y_tr)
+        console.print(f"    [green]✓ LogReg training completed[/green]")
+        
         saver = lambda: joblib.dump(model, probe_dir / "probe_model.joblib")
         predict_proba = lambda X: model.predict_proba(X.values)[:, 1]
 
@@ -792,6 +854,12 @@ def main():
     parser.add_argument("--out_dir", type=str, default=".", help="save dir (default: <data_dir>/probe_models)")
     parser.add_argument("--probe_type", type=str, default="mlp",
                         choices=["mlp", "logreg", "logreg_cal", "tree", "xform", "all"])
+    parser.add_argument("--limit", type=int, default=None, 
+                        help="Limit training examples (for testing with large datasets)")
+    parser.add_argument("--no_calibration", action="store_true",
+                        help="Skip isotonic calibration to save memory (for large datasets)")
+
+
 
     # Transformer hyperparams / behavior
     parser.add_argument("--xform_epochs", type=int, default=40)
@@ -822,29 +890,58 @@ def main():
 
     args = parser.parse_args()
 
+    # Print startup banner
+    console.print(Panel.fit(
+        "[bold cyan]Probe Training Pipeline[/bold cyan]\n"
+        f"Data: {args.data_dir}\n"
+        f"Models: {args.models}\n"
+        f"Probe types: {args.probe_type}\n"
+        f"Use hidden states: {args.use_hidden}\n"
+        f"Output: {args.out_dir or 'data/probe_models'}",
+        title="🔬 Train Probes",
+        border_style="cyan"
+    ))
+
     data_dir = Path(args.data_dir).expanduser()
     out_dir = Path(args.out_dir) if args.out_dir else data_dir / "probe_models"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     model_keys = [m.strip() for m in args.models.split(",") if m.strip()]
 
-    for mk in model_keys:
+    for mk_idx, mk in enumerate(model_keys, 1):
+        console.print(f"\n[bold yellow]{'='*60}[/bold yellow]")
+        console.print(f"[bold yellow]Model {mk_idx}/{len(model_keys)}: backend_{mk}[/bold yellow]")
+        console.print(f"[bold yellow]{'='*60}[/bold yellow]")
+        
         split_files = find_split_files(data_dir, mk)
         if not split_files:
-            print(f"[WARN] No files found for backend_{mk} under {data_dir}")
+            console.print(f"[red]⚠ No files found for backend_{mk} under {data_dir}[/red]")
             continue
-        print(f"== backend_{mk} ==")
+        
+        # Show split files
+        file_table = Table(show_header=True, header_style="bold cyan")
+        file_table.add_column("Split", style="cyan")
+        file_table.add_column("File", style="dim")
         for k, v in split_files.items():
-            print(f"  {k}: {v}")
+            file_table.add_row(k, str(v.relative_to(data_dir)))
+        console.print(file_table)
 
+        console.print(f"\n[cyan]📚 Loading data splits...[/cyan]")
         rows_train = load_rows(split_files.get("train"))
         rows_val   = load_rows(split_files.get("val"))
         rows_test  = load_rows(split_files.get("test"))
+        
+        # Apply limit if specified (for memory management with large datasets)
+        if args.limit and rows_train:
+            original_size = len(rows_train)
+            rows_train = rows_train[:args.limit]
+            console.print(f"  [yellow]⚠ Limited train set: {len(rows_train):,} / {original_size:,} examples[/yellow]")
 
         if not rows_train:
-            print(f"[WARN] backend_{mk}: empty train split after filtering; skipping")
+            console.print(f"[red]⚠ Empty train split for backend_{mk}; skipping[/red]")
             continue
 
+        console.print(f"\n[cyan]🔧 Building feature matrices...[/cyan]")
         df_tr, y_tr, _ = build_df(rows_train, use_hidden=args.use_hidden, label_key=args.label_key)
         df_va, y_va, _ = (None, None, None)
         df_te, y_te, _ = (None, None, None)
@@ -861,18 +958,40 @@ def main():
         if df_te is not None:
             df_te = df_te.reindex(columns=feat_cols)
 
+        # Show dataset statistics
+        stats_table = Table(show_header=True, header_style="bold magenta")
+        stats_table.add_column("Split", style="cyan")
+        stats_table.add_column("Rows", justify="right", style="green")
+        stats_table.add_column("Features", justify="right", style="yellow")
+        stats_table.add_column("Positive %", justify="right", style="blue")
+        
+        stats_table.add_row("train", f"{len(y_tr):,}", str(len(feat_cols)), f"{100*y_tr.mean():.1f}%")
+        if y_va is not None:
+            stats_table.add_row("val", f"{len(y_va):,}", str(len(feat_cols)), f"{100*y_va.mean():.1f}%")
+        if y_te is not None:
+            stats_table.add_row("test", f"{len(y_te):,}", str(len(feat_cols)), f"{100*y_te.mean():.1f}%")
+        
+        console.print(stats_table)
+
         backend_dir = out_dir / f"backend_{mk}"
         backend_dir.mkdir(parents=True, exist_ok=True)
         with open(backend_dir / "feature_names.json", "w", encoding="utf-8") as f:
             json.dump(feat_cols, f, ensure_ascii=False, indent=2)
 
         probe_types = ["mlp", "logreg", "logreg_cal", "tree", "xform"] if args.probe_type == "all" else [args.probe_type]
-        for pt in probe_types:
-            print(f"\n[train] backend_{mk} | probe_type={pt} | use_hidden={args.use_hidden}")
+        
+        console.print(f"\n[bold cyan]🔬 Training {len(probe_types)} probe type(s)...[/bold cyan]")
+        
+        for pt_idx, pt in enumerate(probe_types, 1):
+            console.print(f"\n[yellow]{'─'*60}[/yellow]")
+            console.print(f"[yellow]Probe {pt_idx}/{len(probe_types)}: {pt}[/yellow]")
+            console.print(f"[yellow]{'─'*60}[/yellow]")
+            
             result = fit_and_eval_probe(
                 pt, df_tr, y_tr, df_va, y_va, df_te, y_te,
                 use_hidden=args.use_hidden,
                 out_root=backend_dir,
+                no_calibration=args.no_calibration,  # Pass memory-saving flag
                 # xform knobs
                 xform_epochs=args.xform_epochs,
                 xform_dump_attn=args.xform_dump_attn,
@@ -891,10 +1010,38 @@ def main():
                 xform_min_platt=args.xform_min_platt,
                 xform_cal_debug=args.xform_cal_debug
             )
-            print(f"[OK] Saved {pt} to {result['probe_dir']}")
+            
+            # Show results in a nice table
+            results_table = Table(show_header=True, header_style="bold green")
+            results_table.add_column("Split", style="cyan")
+            results_table.add_column("AUROC", justify="right", style="green")
+            results_table.add_column("AUPRC", justify="right", style="yellow")
+            results_table.add_column("Brier", justify="right", style="blue")
+            results_table.add_column("Best F1", justify="right", style="magenta")
+            results_table.add_column("Threshold", justify="right", style="dim")
+            
             for r in result["splits"]:
-                print(f"  [{r['split']}] AUROC={r['AUROC']:.3f} AUPRC={r['AUPRC']:.3f} "
-                      f"Brier={r['Brier']:.3f} bestF1={r['best_F1']:.3f} thr={r['best_threshold']:.3f}")
+                results_table.add_row(
+                    r['split'],
+                    f"{r['AUROC']:.3f}",
+                    f"{r['AUPRC']:.3f}",
+                    f"{r['Brier']:.3f}",
+                    f"{r['best_F1']:.3f}",
+                    f"{r['best_threshold']:.3f}"
+                )
+            
+            console.print(results_table)
+            console.print(f"[green]✓ Saved to {result['probe_dir']}[/green]\n")
+    
+    # Final completion message
+    console.print(Panel.fit(
+        "[bold green]✓ All probes trained successfully![/bold green]\n\n"
+        f"Output directory: {out_dir}\n"
+        f"Models trained: {', '.join(model_keys)}\n"
+        f"Probe types: {args.probe_type}",
+        title="🎉 Training Complete",
+        border_style="green"
+    ))
 
 if __name__ == "__main__":
     main()
