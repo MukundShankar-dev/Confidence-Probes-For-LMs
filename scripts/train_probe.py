@@ -113,8 +113,21 @@ def build_df(rows, use_hidden=True, label_key="em", show_progress=True):
     if show_progress:
         console.print(f"  [dim]Building feature matrix for {n_rows:,} examples...[/dim]")
     
-    # Pre-allocate for memory efficiency
-    feats, labels, ids = [], [], []
+    # Pre-compute feature count
+    n_scalar = len(SCALAR_KEYS)
+    n_vector = len(VECTOR_KEYS) * 256 if use_hidden else 0
+    n_features = n_scalar + n_vector
+    
+    # Pre-allocate numpy arrays (MUCH faster than list of dicts)
+    X = np.full((n_rows, n_features), np.nan, dtype=np.float32)
+    y = np.zeros(n_rows, dtype=np.int32)
+    ids = np.arange(n_rows)
+    
+    # Build column names
+    col_names = list(SCALAR_KEYS)
+    if use_hidden:
+        for vec_name in VECTOR_KEYS:
+            col_names.extend([f"{vec_name}_{j}" for j in range(256)])
     
     # Process in chunks to show progress
     chunk_size = 10000
@@ -123,29 +136,33 @@ def build_df(rows, use_hidden=True, label_key="em", show_progress=True):
         
         for i in range(chunk_start, chunk_end):
             r = rows[i]
-            x = {}
-            for k in SCALAR_KEYS:
-                x[k] = r.get(k, np.nan)
+            
+            # Fill scalars
+            for j, k in enumerate(SCALAR_KEYS):
+                val = r.get(k, np.nan)
+                X[i, j] = val if val is not None else np.nan
+            
+            # Fill vectors
             if use_hidden:
-                for name in VECTOR_KEYS:
-                    vec = to_1d(r.get(name))
+                col_idx = n_scalar
+                for vec_name in VECTOR_KEYS:
+                    vec = to_1d(r.get(vec_name))
                     if vec is not None:
-                        for j, v in enumerate(vec):
-                            x[f"{name}_{j}"] = float(v)
-            feats.append(x)
-            labels.append(int(r.get(label_key, 0)))
-            ids.append(r.get("idx", i))
+                        X[i, col_idx:col_idx+256] = vec
+                    col_idx += 256
+            
+            y[i] = int(r.get(label_key, 0))
+            ids[i] = r.get("idx", i)
         
         if show_progress and (chunk_end % 50000 == 0 or chunk_end == n_rows):
             pct = 100 * chunk_end / n_rows
             console.print(f"    [green]→[/green] Processed {chunk_end:,}/{n_rows:,} ({pct:.0f}%)")
     
     if show_progress:
-        console.print(f"  [dim]Converting to DataFrame...[/dim]")
+        console.print(f"  [dim]Creating DataFrame...[/dim]")
     
-    df = pd.DataFrame(feats)
-    y = np.array(labels, dtype=int)
-    ids = np.array(ids)
+    # Convert to DataFrame (much faster with pre-allocated array)
+    df = pd.DataFrame(X, columns=col_names)
     
     if show_progress:
         console.print(f"  [green]✓[/green] Feature matrix ready: {df.shape}")
