@@ -7,6 +7,11 @@ import os
 import random
 import re
 from typing import Dict, List, Tuple, Iterable
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+console = Console()
 
 """
 Script to pool probe JSONL files from multiple datasets/backends,
@@ -54,9 +59,16 @@ def iter_jsonl(path: str) -> Iterable[dict]:
 
 
 def pool_rows(files: List[str], tag_from_path: bool) -> List[dict]:
+    console.print(f"\n[cyan]📂 Reading {len(files)} JSONL files...[/cyan]")
+    
     rows = []
-    for fp in files:
+    total_files = len(files)
+    report_every = max(1, total_files // 10)  # Report every 10%
+    
+    for idx, fp in enumerate(files, 1):
         ds_infer, be_infer = infer_dataset_backend(fp)
+        file_rows = 0
+        
         for obj in iter_jsonl(fp):
             if obj.get("overall") is True:
                 continue  # skip summary rows
@@ -64,6 +76,14 @@ def pool_rows(files: List[str], tag_from_path: bool) -> List[dict]:
                 obj.setdefault("dataset", ds_infer)
                 obj.setdefault("backend", be_infer)
             rows.append(obj)
+            file_rows += 1
+        
+        # Report progress every 10%
+        if idx % report_every == 0 or idx == total_files:
+            pct = 100 * idx / total_files
+            console.print(f"  [green]✓[/green] Progress: {idx}/{total_files} files ({pct:.0f}%) | Total rows: {len(rows):,}")
+    
+    console.print(f"[green]✓ Finished reading all files. Total rows collected: {len(rows):,}[/green]\n")
     return rows
 
 
@@ -111,15 +131,21 @@ def make_one_split(out_dir: str, rows: List[dict], train_frac: float, val_frac: 
                    test_frac: float, seed: int, stratify_by_dataset: bool = True):
     os.makedirs(out_dir, exist_ok=True)
 
+    backend_name = os.path.basename(out_dir)
+    console.print(f"\n[yellow]📊 Creating split for: {backend_name}[/yellow]")
+    console.print(f"  Input rows: {len(rows):,}")
+    
     # Assign stable pooled_id per output pool
     for i, r in enumerate(rows):
         r.setdefault("_pooled_id", i)
 
+    console.print(f"  [dim]Writing pooled.jsonl...[/dim]")
     pooled_path = os.path.join(out_dir, "pooled.jsonl")
     with open(pooled_path, "w", encoding="utf-8") as w:
         for r in rows:
             w.write(json.dumps(r, ensure_ascii=False) + "\n")
 
+    console.print(f"  [dim]Performing stratified split (seed={seed})...[/dim]")
     splits = stratified_split(
         rows,
         train_frac=train_frac,
@@ -137,6 +163,8 @@ def make_one_split(out_dir: str, rows: List[dict], train_frac: float, val_frac: 
         },
         "splits": splits,  # indices into pooled.jsonl
     }
+    
+    console.print(f"  [dim]Writing split files...[/dim]")
     with open(os.path.join(out_dir, "split_map.json"), "w", encoding="utf-8") as w:
         json.dump(split_map, w, ensure_ascii=False, indent=2)
 
@@ -144,7 +172,19 @@ def make_one_split(out_dir: str, rows: List[dict], train_frac: float, val_frac: 
     write_jsonl(os.path.join(out_dir, "val.jsonl"),   rows, splits["val"])
     write_jsonl(os.path.join(out_dir, "test.jsonl"),  rows, splits["test"])
 
-    print(f"[ok] {out_dir}: train={len(splits['train'])}  val={len(splits['val'])}  test={len(splits['test'])}")
+    # Create a nice summary table
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Split", style="cyan")
+    table.add_column("Count", justify="right", style="green")
+    table.add_column("Percentage", justify="right", style="yellow")
+    
+    for split_name in ["train", "val", "test"]:
+        count = len(splits[split_name])
+        pct = 100 * count / len(rows)
+        table.add_row(split_name, f"{count:,}", f"{pct:.1f}%")
+    
+    console.print(table)
+    console.print(f"[green]✓ Completed {backend_name}[/green]\n")
 
 
 def main():
@@ -162,25 +202,57 @@ def main():
 
     args = ap.parse_args()
 
+    # Print startup banner
+    console.print(Panel.fit(
+        "[bold cyan]Probe Data Split Creator[/bold cyan]\n"
+        f"Root: {args.root}\n"
+        f"Output: {args.out_dir}\n"
+        f"Split: {args.train_frac:.0%} train / {args.val_frac:.0%} val / {args.test_frac:.0%} test\n"
+        f"Seed: {args.seed}",
+        title="🔬 Make Probe Split",
+        border_style="cyan"
+    ))
+
     os.makedirs(args.out_dir, exist_ok=True)
 
     # 1) Discover files and pool everything
+    console.print(f"\n[cyan]🔍 Discovering JSONL files in {args.root}...[/cyan]")
     files = sorted(glob.glob(os.path.join(args.root, args.glob), recursive=True))
+    
     if not files:
-        raise SystemExit(f"No JSONL files found under {args.root} with pattern {args.glob}")
+        console.print(f"[red]❌ No JSONL files found under {args.root} with pattern {args.glob}[/red]")
+        raise SystemExit(1)
+    
+    console.print(f"[green]✓ Found {len(files)} JSONL files[/green]")
 
     all_rows = pool_rows(files, tag_from_path=not args.no_tag_from_path)
+    
     if not all_rows:
-        raise SystemExit("No rows found after filtering (only 'overall' records?)")
+        console.print("[red]❌ No rows found after filtering (only 'overall' records?)[/red]")
+        raise SystemExit(1)
 
     # 2) Collect per-backend subsets
+    console.print(f"[cyan]📋 Organizing rows by backend...[/cyan]")
     by_backend: Dict[str, List[dict]] = {}
     for r in all_rows:
         be = r.get("backend", "_unknown")
         by_backend.setdefault(be, []).append(r)
+    
+    # Show backend summary
+    backend_table = Table(show_header=True, header_style="bold magenta")
+    backend_table.add_column("Backend", style="cyan")
+    backend_table.add_column("Row Count", justify="right", style="green")
+    backend_table.add_column("Percentage", justify="right", style="yellow")
+    
+    for be, rows in sorted(by_backend.items()):
+        pct = 100 * len(rows) / len(all_rows)
+        backend_table.add_row(be, f"{len(rows):,}", f"{pct:.1f}%")
+    
+    console.print(backend_table)
 
     # 3) Global pooled split (optional)
     if not args.skip_global:
+        console.print(f"\n[bold yellow]═══ Creating Global Split (All Backends) ═══[/bold yellow]")
         make_one_split(
             out_dir=os.path.join(args.out_dir, "pooled_all_backends"),
             rows=all_rows,
@@ -192,7 +264,9 @@ def main():
         )
 
     # 4) Per-backend splits (stratified by dataset within each backend)
-    for be, rows in sorted(by_backend.items()):
+    console.print(f"[bold yellow]═══ Creating Per-Backend Splits ═══[/bold yellow]")
+    for i, (be, rows) in enumerate(sorted(by_backend.items()), 1):
+        console.print(f"\n[dim]Backend {i}/{len(by_backend)}[/dim]")
         out_be = os.path.join(args.out_dir, f"backend_{be}")
         make_one_split(
             out_dir=out_be,
@@ -203,6 +277,16 @@ def main():
             seed=args.seed,
             stratify_by_dataset=True,
         )
+    
+    # Final summary
+    console.print(Panel.fit(
+        f"[bold green]✓ All splits created successfully![/bold green]\n\n"
+        f"Total rows processed: {len(all_rows):,}\n"
+        f"Backends: {len(by_backend)}\n"
+        f"Output directory: {args.out_dir}",
+        title="🎉 Complete",
+        border_style="green"
+    ))
 
 
 if __name__ == "__main__":
