@@ -59,14 +59,14 @@ except Exception:
 # Optimal F1 thresholds from training
 OPTIMAL_THRESHOLDS = {
     "llama31": {
-        "mlp": 0.323,
+        "mlp": 0.327,
         "logreg": 0.304,
         "logreg_cal": 0.308,
         "tree": 0.210,
         "xform": 0.243,
     },
     "qwen": {
-        "mlp": 0.319,
+        "mlp": 0.314,
         "logreg": 0.348,
         "logreg_cal": 0.365,
         "tree": 0.146,
@@ -76,13 +76,13 @@ OPTIMAL_THRESHOLDS = {
 
 # Dataset test split mapping
 DATASET_TEST_SPLITS = {
-    "triviaqa": "test",
-    "hotpotqa": "test",
-    # "hotpot_qa": "test",
-    "squad_v2": "test",
+    "triviaqa": "validation",
+    "hotpotqa": "validation",
+    "hotpot_qa": "validation",
+    "squad_v2": "validation",
     # "squad2": "test",
     "gsm8k": "test",
-    "mmlu": "test",
+    "mmlu": "validation",
     # "nq_open": "test",
 }
 

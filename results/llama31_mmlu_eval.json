@@ -1,21 +1,21 @@
 {
   "model": "llama31",
-  "probe_dir": "backend_llama/probe_mlp",
+  "probe_dir": "backend_llama31/probe_mlp",
   "use_hidden": true,
   "datasets": [
     {
       "dataset": "mmlu",
-      "n_examples": 14042,
-      "model_accuracy": 0.14057826520438685,
-      "probe_accuracy": 0.9042871385842473,
-      "probe_precision": 0.6128223495702005,
-      "probe_recall": 0.8667679837892603,
-      "probe_f1": 0.7180025178346622,
-      "tp": 1711,
-      "fp": 1081,
-      "tn": 10987,
-      "fn": 263,
-      "threshold": 0.323
+      "n_examples": 1531,
+      "model_accuracy": 0.1338994121489223,
+      "probe_accuracy": 0.9255388634879164,
+      "probe_precision": 0.6552901023890785,
+      "probe_recall": 0.9365853658536586,
+      "probe_f1": 0.7710843373493976,
+      "tp": 192,
+      "fp": 101,
+      "tn": 1225,
+      "fn": 13,
+      "threshold": 0.327
     }
   ]
 }

@@ -875,6 +875,8 @@ def main():
                         help="Limit training examples (for testing with large datasets)")
     parser.add_argument("--no_calibration", action="store_true",
                         help="Skip isotonic calibration to save memory (for large datasets)")
+    parser.add_argument("--skip_xform", action="store_true",
+                        help="Skip transformer probe when using --probe_type all (saves memory)")
 
 
 
@@ -996,6 +998,11 @@ def main():
             json.dump(feat_cols, f, ensure_ascii=False, indent=2)
 
         probe_types = ["mlp", "logreg", "logreg_cal", "tree", "xform"] if args.probe_type == "all" else [args.probe_type]
+        
+        # Remove xform if requested (for memory-constrained environments)
+        if args.skip_xform and "xform" in probe_types:
+            probe_types.remove("xform")
+            console.print(f"[yellow]⚠ Skipping transformer probe to save memory[/yellow]")
         
         console.print(f"\n[bold cyan]🔬 Training {len(probe_types)} probe type(s)...[/bold cyan]")
         

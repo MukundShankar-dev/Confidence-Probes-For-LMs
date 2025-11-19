@@ -1,21 +1,6 @@
 {
   "model": "llama31",
-  "probe_dir": "backend_llama/probe_mlp",
+  "probe_dir": "backend_llama31/probe_mlp",
   "use_hidden": true,
-  "datasets": [
-    {
-      "dataset": "gsm8k",
-      "n_examples": 1319,
-      "model_accuracy": 0.000758150113722517,
-      "probe_accuracy": 0.9984836997725549,
-      "probe_precision": 0.0,
-      "probe_recall": 0.0,
-      "probe_f1": 0.0,
-      "tp": 0,
-      "fp": 1,
-      "tn": 1317,
-      "fn": 1,
-      "threshold": 0.323
-    }
-  ]
+  "datasets": []
 }
