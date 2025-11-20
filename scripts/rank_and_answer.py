@@ -206,11 +206,15 @@ def extract_features_for_choice(model, question: str, choice_letter: str,
     """
     Generate answer for a specific choice and extract probe features.
     
-    Instead of forcing output, we:
-    1. Create a prompt that suggests this choice
-    2. Let the model generate freely
-    3. Extract features from the actual generation
-    4. Use probe to score this generation
+    CRITICAL: Must use the SAME prompt format as training!
+    
+    During training, the prompt was:
+        Q: What is the capital of France?
+    
+    And model generated:
+        {"answer": "Paris", "p_true": 0.92}
+    
+    We need to match this format exactly, but bias towards a specific choice.
     
     Args:
         model: The language model
@@ -227,48 +231,61 @@ def extract_features_for_choice(model, question: str, choice_letter: str,
     import json
     import re
     
-    # Format prompt with all choices visible
-    prompt = MMLU_PROMPT_TEMPLATE.format(
-        question=question,
-        choice_a=all_choices["A"],
-        choice_b=all_choices["B"],
-        choice_c=all_choices["C"],
-        choice_d=all_choices["D"]
-    )
+    # Use the SAME format as training (FEWSHOT_PROMPT style from eval_probe.py)
+    # But include context about all choices
+    prompt = f"""You are answering trivia questions.
+Return only a single JSON object with fields:
+- "answer": the short factual span (1–5 words, no punctuation)
+- "p_true": the probability (0.0–1.0) that this answer is correct (round to two decimals)
+
+Q: Who wrote Hamlet?
+{{"answer": "William Shakespeare", "p_true": 0.95}}
+
+Q: What is the capital of France?
+{{"answer": "Paris", "p_true": 0.92}}
+
+Q: {question}
+Choices: A. {all_choices["A"]}, B. {all_choices["B"]}, C. {all_choices["C"]}, D. {all_choices["D"]}
+
+If the correct answer is choice {choice_letter} ({choice_text}), respond:
+"""
     
-    # Add a hint towards this specific choice (but let model generate)
-    # This biases the model to consider this choice more seriously
-    prompt = prompt + f'\n{{"answer":"{choice_letter}"'
-    
-    # Generate with the model (actual generation, not forced)
+    # Let model generate the full JSON
     inp, gen = model.generate_with_states(prompt)
     
     start_pos = inp["input_ids"].shape[-1]
     new_ids = gen.sequences[:, start_pos:]
     raw_text = model.tok.decode(new_ids[0], skip_special_tokens=True).strip()
     
-    # Complete the JSON if needed
-    full_text = f'{{"answer":"{choice_letter}"' + raw_text
-    
-    # Try to extract p_true from generated text
+    # Try to extract answer and p_true from generated text
+    answer = choice_text  # We know what answer should be
     p_model = None
+    
     try:
-        # Look for p_true value
-        match = re.search(r'"p_true":\s*([0-9.]+)', full_text)
-        if match:
-            p_model = float(match.group(1))
+        # Try to parse as JSON
+        if raw_text.strip().startswith("{"):
+            parsed = json.loads(raw_text)
+            if "p_true" in parsed:
+                p_model = float(parsed["p_true"])
+            if "answer" in parsed:
+                answer = parsed["answer"]
+        else:
+            # Look for p_true value in text
+            match = re.search(r'"p_true":\s*([0-9.]+)', raw_text)
+            if match:
+                p_model = float(match.group(1))
     except:
         pass
     
     if p_model is None:
-        p_model = 0.5  # Default
+        p_model = 0.5  # Default if can't parse
     
-    # Now extract features using the same function as eval_probe
+    # Now extract features using the same method as eval_probe
     device = next(model.model.parameters()).device
     tok = model.tok
     hf_causal_lm = model.model
     
-    # Token-level statistics
+    # Token-level statistics from generation
     scores = gen.scores or []
     T = len(scores)
     gen_ids_seq = new_ids[0].tolist()
@@ -329,9 +346,14 @@ def extract_features_for_choice(model, question: str, choice_letter: str,
             h_last_mid_256 = pack_256(h_last_mid) if h_last_mid is not None else None
             h_pool_mid_256 = pack_256(h_pool_mid) if h_pool_mid is not None else None
     
-    # Rescore probability
-    safe_choice = choice_letter
-    canon_json = f'{{"answer":"{safe_choice}","p_true":{p_model:.2f}}}'
+    # DEBUG: Print what was actually generated
+    import os
+    if os.environ.get('DEBUG_GENERATION') == '1':
+        console.print(f"[dim]Generated text: '{raw_text}'[/dim]")
+        console.print(f"[dim]Generated tokens: {new_ids.shape[-1]}[/dim]")
+    
+    # Rescore probability - use the actual answer text, not just the letter
+    canon_json = f'{{"answer": "{answer}", "p_true": {p_model:.2f}}}'
     rescore_lp = rescore_mean_logprob(hf_causal_lm, tok, prompt, canon_json)
     
     features = {
@@ -344,9 +366,9 @@ def extract_features_for_choice(model, question: str, choice_letter: str,
         "margin_min": margin_min,
         "rescore_logp": rescore_lp,
         "answer_len": int(new_ids.shape[-1]),
-        "parsed_json_ok": 1 if raw_text else 0,
+        "parsed_json_ok": 1 if "{" in raw_text else 0,
         "parsed_p_true_ok": 1 if p_model is not None else 0,
-        "is_unknown": 0,
+        "is_unknown": 1 if "unknown" in answer.lower() else 0,
         "h_last_256": h_last_256,
         "h_pool_256": h_pool_256,
         "h_last_mid_256": h_last_mid_256,

@@ -8,7 +8,7 @@
 #SBATCH --time=6:00:00
 #SBATCH -o logs/%x_%A_%a.out
 #SBATCH -e logs/%x_%A_%a.err
-#SBATCH --array=0-4
+#SBATCH --array=0-9
 
 set -euo pipefail
 source ~/.bashrc
@@ -44,16 +44,19 @@ export PYTHONUNBUFFERED=1
 
 # echo "Completed evaluation for $MODEL on $DATASET"
 
-DATASETS=("triviaqa" "hotpotqa" "squad_v2" "gsm8k" "mmlu")
+MODELS=("llama31" "llama31" "llama31" "llama31" "llama31" "qwen" "qwen" "qwen" "qwen" "qwen")
+DATASETS=("triviaqa" "hotpotqa" "squad_v2" "gsm8k" "mmlu" "triviaqa" "hotpotqa" "squad_v2" "gsm8k" "mmlu")
 DATASET=${DATASETS[$SLURM_ARRAY_TASK_ID]}
+MODEL=${MODELS[$SLURM_ARRAY_TASK_ID]}
 
 echo "=========================================="
 echo "Running evaluation for:"
+echo "  Model: $MODEL"
 echo "  Dataset: $DATASET"
 echo "  Array Task ID: $SLURM_ARRAY_TASK_ID"
 echo "=========================================="
 
-python -m scripts.eval_probe --model llama31 --probe_dir backend_llama31/probe_mlp --use_hidden --datasets $DATASET --output results/llama31_${DATASET}_eval.json
+python -m scripts.eval_probe --model $MODEL --probe_dir backend_${MODEL}/probe_mlp --use_hidden --datasets $DATASET --output results/${MODEL}_${DATASET}_eval.json
 
 # python -m scripts.eval_probe --model llama31 --probe_dir backend_llama31/probe_mlp --use_hidden --datasets triviaqa
 # python -m scripts.eval_probe --model llama31 --probe_dir backend_llama31/probe_mlp --use_hidden --datasets hotpotqa
