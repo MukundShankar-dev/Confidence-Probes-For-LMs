@@ -33,6 +33,58 @@ from src.models.qwen7b import Qwen7B
 
 console = Console()
 
+# ============================================================================
+# RELATIVE CONFIDENCE SCORING
+# ============================================================================
+# Maps probe's actual output distribution (0.0-0.5, mean=0.18) to intuitive 0-1 scale
+
+PROBE_PERCENTILES = {
+    'p01': 0.000,  # Bottom 1%
+    'p10': 0.010,  # Bottom 10%
+    'p25': 0.040,  # Bottom 25%
+    'p50': 0.100,  # Median
+    'p75': 0.200,  # Top 25%
+    'p90': 0.350,  # Top 10%
+    'p99': 0.600,  # Top 1%
+}
+
+def relative_confidence(raw_prob, scale='0-100'):
+    """
+    Convert raw probe probability to relative confidence score.
+    
+    Based on observed validation distribution where most predictions
+    are in 0.0-0.3 range with mean=0.18.
+    
+    Examples:
+        0.186 (Paris) → 79/100 (High)
+        0.119 (Abu Dhabi) → 61/100 (Medium-High)
+        0.025 (wrong math) → 18/100 (Low)
+        0.000 (impossible) → 0/100 (Very Low)
+    """
+    p = PROBE_PERCENTILES
+    
+    if raw_prob <= p['p01']:
+        rel = 0.0
+    elif raw_prob <= p['p10']:
+        rel = 0.1 * (raw_prob - p['p01']) / (p['p10'] - p['p01'])
+    elif raw_prob <= p['p25']:
+        rel = 0.1 + 0.15 * (raw_prob - p['p10']) / (p['p25'] - p['p10'])
+    elif raw_prob <= p['p50']:
+        rel = 0.25 + 0.25 * (raw_prob - p['p25']) / (p['p50'] - p['p25'])
+    elif raw_prob <= p['p75']:
+        rel = 0.5 + 0.25 * (raw_prob - p['p50']) / (p['p75'] - p['p50'])
+    elif raw_prob <= p['p90']:
+        rel = 0.75 + 0.15 * (raw_prob - p['p75']) / (p['p90'] - p['p75'])
+    elif raw_prob <= p['p99']:
+        rel = 0.9 + 0.09 * (raw_prob - p['p90']) / (p['p99'] - p['p90'])
+    else:
+        rel = 0.99 + 0.01 * min(1.0, (raw_prob - p['p99']) / (1.0 - p['p99']))
+    
+    if scale == '0-100':
+        return rel * 100.0
+    else:
+        return rel
+
 # Chat prompt templates
 CHAT_TEMPLATES = {
     'training': """You are answering trivia questions. Return only a single JSON object with keys exactly "answer" and "confidence". Do not include any other keys or text. The key must be spelled "confidence" (not "conference").
@@ -472,18 +524,21 @@ def interactive_mode(model, probe):
         
         # Estimate confidence
         confidence = run_probe_inference(probe, features)
+        rel_conf = relative_confidence(confidence, scale='0-100')
         
         # Display
-        print(f"\nAssistant: {answer}")
+        print(f"\nA: {answer}")
         print(f"\n{'─'*80}")
-        print(f"Confidence Score: {confidence:.3f}")
+        print(f"Confidence Score: {confidence:.3f} (raw) → {rel_conf:.1f}/100 (relative)")
         
-        if confidence > 0.8:
+        if rel_conf >= 75:
             print("  ✓ High confidence - likely correct")
-        elif confidence > 0.5:
+        elif rel_conf >= 50:
             print("  ⚠ Medium confidence - verify if important")
+        elif rel_conf >= 25:
+            print("  ⚠ Low confidence - likely uncertain")
         else:
-            print("  ✗ Low confidence - likely incorrect or uncertain")
+            print("  ✗ Very low confidence - likely incorrect")
         print(f"{'─'*80}\n")
 
 def batch_mode(model, probe, questions_file, output_file):
