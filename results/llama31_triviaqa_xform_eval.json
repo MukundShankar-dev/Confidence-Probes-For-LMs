@@ -1,0 +1,20 @@
+{
+  "model": "llama31",
+  "datasets": [
+    {
+      "dataset": "triviaqa",
+      "probe_type": "xform",
+      "n_examples": 11313,
+      "model_accuracy": 0.35286838150799965,
+      "probe_accuracy": 0.6829311411650314,
+      "probe_precision": 0.5306864676466131,
+      "probe_recall": 0.877254509018036,
+      "probe_f1": 0.6613162118780096,
+      "tp": 3502,
+      "fp": 3097,
+      "tn": 4224,
+      "fn": 490,
+      "threshold": 0.359
+    }
+  ]
+}

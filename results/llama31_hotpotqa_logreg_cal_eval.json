@@ -1,0 +1,20 @@
+{
+  "model": "llama31",
+  "datasets": [
+    {
+      "dataset": "hotpotqa",
+      "probe_type": "logreg_cal",
+      "n_examples": 7405,
+      "model_accuracy": 0.11586765698852126,
+      "probe_accuracy": 0.8669817690749494,
+      "probe_precision": 0.4492406075139888,
+      "probe_recall": 0.655011655011655,
+      "probe_f1": 0.5329540066382171,
+      "tp": 562,
+      "fp": 689,
+      "tn": 5858,
+      "fn": 296,
+      "threshold": 0.322
+    }
+  ]
+}

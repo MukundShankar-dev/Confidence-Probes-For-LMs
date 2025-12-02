@@ -29,6 +29,7 @@ def read_eval_probe_output(results_dir="results"):
     """
     Read evaluation results from JSON files
     Handles eval_probe.py JSON format with datasets array
+    Supports filenames: {model}_{dataset}_{probe}_eval.json
     """
     results_path = Path(results_dir)
     json_files = list(results_path.glob("*_eval.json"))
@@ -43,12 +44,35 @@ def read_eval_probe_output(results_dir="results"):
             with open(json_file, 'r') as f:
                 result = json.load(f)
             
+            # Extract probe type from filename: {model}_{dataset}_{probe}_eval.json
+            filename = json_file.stem  # Remove .json
+            parts = filename.split('_')
+            
+            # Handle different filename patterns
+            if len(parts) >= 4 and parts[-1] == 'eval':
+                # Pattern: model_dataset_probe_eval.json
+                probe_key = parts[-2]
+            else:
+                # Fallback: assume mlp if not specified
+                probe_key = 'mlp'
+            
+            # Map probe names
+            probe_map = {
+                "mlp": "MLP",
+                "logreg": "LogReg",
+                "logreg_cal": "LogReg+Cal",
+                "tree": "Tree",
+                "xform": "Transformer"
+            }
+            probe = probe_map.get(probe_key, probe_key)
+            
             # Extract model name from JSON
             model_key = result.get('model', '')
             
             # Map to readable names
             model_map = {
-                "llama31": "Llama-3.1-8B",
+                "llama": "Llama-3.1-8B",
+                "llama31": "Llama-3.1-8B",  # Support both
                 "qwen": "Qwen2.5-7B"
             }
             model = model_map.get(model_key, model_key)
@@ -72,6 +96,7 @@ def read_eval_probe_output(results_dir="results"):
                 # Extract metrics
                 data.append({
                     'Model': model,
+                    'Probe': probe,
                     'Dataset': dataset,
                     'N': dataset_result.get('n_examples', 0),
                     'Model_Acc': dataset_result.get('model_accuracy', 0.0),
@@ -86,7 +111,7 @@ def read_eval_probe_output(results_dir="results"):
                     'FN': dataset_result.get('fn', 0),
                 })
             
-            print(f"✓ Loaded: {model} - {dataset}")
+            print(f"✓ Loaded: {model} - {dataset} - {probe}")
             
         except Exception as e:
             print(f"Error reading {json_file}: {e}")
@@ -98,7 +123,7 @@ def read_eval_probe_output(results_dir="results"):
         return None
     
     df = pd.DataFrame(data)
-    df = df.sort_values(['Model', 'Dataset']).reset_index(drop=True)
+    df = df.sort_values(['Model', 'Probe', 'Dataset']).reset_index(drop=True)
     return df
 
 def create_beautiful_plots(df, output_dir="results/figures"):
@@ -112,38 +137,63 @@ def create_beautiful_plots(df, output_dir="results/figures"):
         'Qwen2.5-7B': '#4ECDC4',    # Turquoise
     }
     
-    # 1. Model Comparison - Grouped Bar Chart
-    fig, ax = plt.subplots(figsize=(14, 8))
+    # 1. Probe Type Comparison - Grouped Bar Chart
+    fig, ax = plt.subplots(figsize=(16, 8))
     
     metrics = ['Probe_Acc', 'Precision', 'Recall', 'F1']
     metric_labels = ['Probe Accuracy', 'Precision', 'Recall', 'F1 Score']
     
-    model_means = df.groupby('Model')[metrics].mean()
+    # Group by Model and Probe, average across datasets
+    grouped = df.groupby(['Model', 'Probe'])[metrics].mean().reset_index()
+    
+    probes = grouped['Probe'].unique()
+    models = grouped['Model'].unique()
+    n_probes = len(probes)
+    n_models = len(models)
     
     x = np.arange(len(metrics))
-    width = 0.35
+    width = 0.08  # Narrower bars for more groups
     
-    for idx, (model, row) in enumerate(model_means.iterrows()):
-        offset = (idx - 0.5) * width
-        bars = ax.bar(x + offset, row[metrics], width, 
-                     label=model, color=colors[model], alpha=0.8,
-                     edgecolor='white', linewidth=2)
-        
-        # Add value labels on bars
-        for bar in bars:
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height,
-                   f'{height:.2f}',
-                   ha='center', va='bottom', fontsize=10, fontweight='bold')
+    # Different colors for each probe type
+    probe_colors = {
+        'MLP': '#E74C3C',
+        'LogReg': '#3498DB', 
+        'LogReg+Cal': '#9B59B6',
+        'Tree': '#2ECC71',
+        'Transformer': '#F39C12'
+    }
+    
+    idx = 0
+    for model in models:
+        for probe in probes:
+            subset = grouped[(grouped['Model'] == model) & (grouped['Probe'] == probe)]
+            if subset.empty:
+                continue
+            
+            offset = (idx - (n_probes * n_models) / 2) * width
+            bars = ax.bar(x + offset, subset[metrics].values[0], width,
+                         label=f'{model} - {probe}',
+                         color=probe_colors.get(probe, '#95A5A6'),
+                         alpha=0.8 if model == models[0] else 0.6,
+                         edgecolor='white', linewidth=1.5)
+            
+            # Add value labels on bars (only for top 3 performers)
+            if idx < 3:
+                for bar in bars:
+                    height = bar.get_height()
+                    ax.text(bar.get_x() + bar.get_width()/2., height,
+                           f'{height:.2f}',
+                           ha='center', va='bottom', fontsize=8)
+            idx += 1
     
     ax.set_xlabel('Metric', fontsize=14, fontweight='bold')
     ax.set_ylabel('Score', fontsize=14, fontweight='bold')
-    ax.set_title('Cross-Model Performance Comparison\n(Averaged Across All Datasets)', 
+    ax.set_title('Probe Architecture Comparison Across All Datasets\n(Averaged Performance)', 
                 fontsize=16, fontweight='bold', pad=20)
     ax.set_xticks(x)
     ax.set_xticklabels(metric_labels)
     ax.set_ylim(0, 1.05)
-    ax.legend(loc='upper right', frameon=True, shadow=True)
+    ax.legend(loc='upper right', frameon=True, shadow=True, ncol=2, fontsize=9)
     ax.grid(axis='y', alpha=0.3, linestyle='--')
     
     plt.tight_layout()
@@ -176,6 +226,61 @@ def create_beautiful_plots(df, output_dir="results/figures"):
     plt.tight_layout()
     plt.savefig(f'{output_dir}/dataset_heatmap.png', dpi=300, bbox_inches='tight')
     print(f"✓ Saved: {output_dir}/dataset_heatmap.png")
+    plt.close()
+    
+    # 2b. NEW: Probe Type Performance by Dataset
+    fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+    axes = axes.flatten()
+    
+    datasets = df['Dataset'].unique()
+    probes = df['Probe'].unique()
+    
+    for idx, dataset in enumerate(datasets):
+        if idx >= 6:
+            break
+        ax = axes[idx]
+        
+        dataset_data = df[df['Dataset'] == dataset].groupby(['Model', 'Probe'])['F1'].mean().reset_index()
+        
+        # Pivot for grouped bar chart
+        pivot = dataset_data.pivot(index='Probe', columns='Model', values='F1')
+        
+        x = np.arange(len(pivot.index))
+        width = 0.35
+        
+        colors_local = {'Llama-3.1-8B': '#FF6B6B', 'Qwen2.5-7B': '#4ECDC4'}
+        
+        for i, model in enumerate(pivot.columns):
+            offset = (i - 0.5) * width
+            bars = ax.bar(x + offset, pivot[model], width, 
+                         label=model, color=colors_local[model], alpha=0.8)
+            
+            # Add values
+            for bar in bars:
+                height = bar.get_height()
+                if not np.isnan(height):
+                    ax.text(bar.get_x() + bar.get_width()/2., height,
+                           f'{height:.2f}',
+                           ha='center', va='bottom', fontsize=9)
+        
+        ax.set_title(f'{dataset}', fontsize=13, fontweight='bold')
+        ax.set_ylabel('F1 Score', fontsize=11)
+        ax.set_xticks(x)
+        ax.set_xticklabels(pivot.index, rotation=45, ha='right')
+        ax.set_ylim(0, 1.0)
+        ax.legend(loc='upper right', fontsize=9)
+        ax.grid(axis='y', alpha=0.3, linestyle='--')
+    
+    # Hide unused subplot
+    if len(datasets) < 6:
+        for idx in range(len(datasets), 6):
+            axes[idx].set_visible(False)
+    
+    plt.suptitle('Probe Performance by Dataset\n(F1 Score Comparison)', 
+                fontsize=16, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(f'{output_dir}/probe_by_dataset.png', dpi=300, bbox_inches='tight')
+    print(f"✓ Saved: {output_dir}/probe_by_dataset.png")
     plt.close()
     
     # 3. Precision vs Recall Scatter
@@ -221,11 +326,16 @@ def create_beautiful_plots(df, output_dir="results/figures"):
     print(f"✓ Saved: {output_dir}/precision_recall.png")
     plt.close()
     
-    # 4. Confusion Matrix Visualization
+    # 4. Confusion Matrix Visualization (Best probe per model-dataset)
+    # Select only MLP probe for clarity (best performer)
+    df_mlp = df[df['Probe'] == 'MLP'].copy()
+    
     fig, axes = plt.subplots(2, 5, figsize=(20, 10))
     axes = axes.flatten()
     
-    for idx, (_, row) in enumerate(df.iterrows()):
+    for idx, (_, row) in enumerate(df_mlp.iterrows()):
+        if idx >= 10:
+            break
         ax = axes[idx]
         
         # Create confusion matrix
@@ -238,14 +348,18 @@ def create_beautiful_plots(df, output_dir="results/figures"):
         # Plot
         sns.heatmap(cm_pct, annot=True, fmt='.1f', cmap='Blues', ax=ax,
                    cbar=False, square=True,
-                   xticklabels=['Pred Correct', 'Pred Wrong'],
+                   xticklabels=['Pred Wrong', 'Pred Correct'],  # FIXED: Swapped order
                    yticklabels=['True Correct', 'True Wrong'],
                    linewidths=2, linecolor='white')
         
         ax.set_title(f'{row["Model"]}\n{row["Dataset"]}\n(P={row["Precision"]:.2f}, R={row["Recall"]:.2f})',
                     fontsize=10, fontweight='bold')
         
-    plt.suptitle('Confusion Matrices (% of Total Examples)', 
+    # Hide unused subplots
+    for idx in range(len(df_mlp), 10):
+        axes[idx].set_visible(False)
+    
+    plt.suptitle('Confusion Matrices - MLP Probe (% of Total Examples)', 
                 fontsize=16, fontweight='bold', y=0.995)
     plt.tight_layout()
     plt.savefig(f'{output_dir}/confusion_matrices.png', dpi=300, bbox_inches='tight')
@@ -333,6 +447,20 @@ def create_beautiful_plots(df, output_dir="results/figures"):
     plt.close()
     
     print(f"\n✓ All visualizations saved to {output_dir}/")
+    print(f"    Total files: 7 visualization PNGs")
+    
+    # Print probe ranking
+    print("\n" + "="*60)
+    print("PROBE RANKING (by average F1 across all datasets)")
+    print("="*60)
+    probe_ranking = df.groupby(['Model', 'Probe'])['F1'].mean().reset_index()
+    probe_ranking = probe_ranking.sort_values(['Model', 'F1'], ascending=[True, False])
+    for model in probe_ranking['Model'].unique():
+        print(f"\n{model}:")
+        model_probes = probe_ranking[probe_ranking['Model'] == model]
+        for idx, row in enumerate(model_probes.itertuples(), 1):
+            print(f"  {idx}. {row.Probe:15s} F1={row.F1:.3f}")
+
 
 def main():
     print("="*80)
@@ -359,7 +487,7 @@ def main():
     print("RESULTS SUMMARY")
     print("="*80)
     print()
-    print(df[['Model', 'Dataset', 'Model_Acc', 'Probe_Acc', 'Precision', 'Recall', 'F1']].to_string(index=False))
+    print(df[['Model', 'Probe', 'Dataset', 'Model_Acc', 'Probe_Acc', 'Precision', 'Recall', 'F1']].to_string(index=False))
     print()
     
     # Create visualizations
@@ -379,8 +507,17 @@ def main():
     print("="*80)
     print()
     print("Generated files:")
-    print("  - results/figures/*.png (6 visualization files)")
+    print("  - results/figures/*.png (7 visualization files)")
     print("  - results/probe_evaluation_summary.csv")
+    print()
+    print("Visualizations:")
+    print("  1. model_comparison.png - Probe architecture comparison")
+    print("  2. dataset_heatmap.png - Per-dataset performance heatmaps")
+    print("  3. probe_by_dataset.png - Probe F1 scores by dataset")
+    print("  4. precision_recall.png - Precision vs Recall scatter")
+    print("  5. confusion_matrices.png - Confusion matrices (MLP only)")
+    print("  6. model_acc_vs_probe.png - Model accuracy vs probe F1")
+    print("  7. false_positive_rate.png - FPR by dataset")
     print()
 
 if __name__ == "__main__":

@@ -1,0 +1,20 @@
+{
+  "model": "qwen",
+  "datasets": [
+    {
+      "dataset": "gsm8k",
+      "probe_type": "tree",
+      "n_examples": 1319,
+      "model_accuracy": 0.06292645943896892,
+      "probe_accuracy": 0.9037149355572404,
+      "probe_precision": 0.21052631578947367,
+      "probe_recall": 0.1927710843373494,
+      "probe_f1": 0.20125786163522014,
+      "tp": 16,
+      "fp": 60,
+      "tn": 1176,
+      "fn": 67,
+      "threshold": 0.269
+    }
+  ]
+}

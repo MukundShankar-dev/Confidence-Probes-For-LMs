@@ -1,0 +1,20 @@
+{
+  "model": "qwen",
+  "datasets": [
+    {
+      "dataset": "mmlu",
+      "probe_type": "tree",
+      "n_examples": 1531,
+      "model_accuracy": 0.09797517962116264,
+      "probe_accuracy": 0.9085564990202482,
+      "probe_precision": 0.525,
+      "probe_recall": 0.7,
+      "probe_f1": 0.6,
+      "tp": 105,
+      "fp": 95,
+      "tn": 1286,
+      "fn": 45,
+      "threshold": 0.269
+    }
+  ]
+}

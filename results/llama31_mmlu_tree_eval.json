@@ -1,0 +1,20 @@
+{
+  "model": "llama31",
+  "datasets": [
+    {
+      "dataset": "mmlu",
+      "probe_type": "tree",
+      "n_examples": 1531,
+      "model_accuracy": 0.1338994121489223,
+      "probe_accuracy": 0.9105160026126714,
+      "probe_precision": 0.6317829457364341,
+      "probe_recall": 0.7951219512195122,
+      "probe_f1": 0.7041036717062635,
+      "tp": 163,
+      "fp": 95,
+      "tn": 1231,
+      "fn": 42,
+      "threshold": 0.296
+    }
+  ]
+}

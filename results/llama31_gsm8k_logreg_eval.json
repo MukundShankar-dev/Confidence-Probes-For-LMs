@@ -1,0 +1,20 @@
+{
+  "model": "llama31",
+  "datasets": [
+    {
+      "dataset": "gsm8k",
+      "probe_type": "logreg",
+      "n_examples": 1319,
+      "model_accuracy": 0.000758150113722517,
+      "probe_accuracy": 0.9984836997725549,
+      "probe_precision": 0.0,
+      "probe_recall": 0.0,
+      "probe_f1": 0.0,
+      "tp": 0,
+      "fp": 1,
+      "tn": 1317,
+      "fn": 1,
+      "threshold": 0.308
+    }
+  ]
+}

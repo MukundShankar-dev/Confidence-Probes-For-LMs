@@ -15,35 +15,6 @@ source ~/.bashrc
 conda activate llm
 export PYTHONUNBUFFERED=1
 
-# Define all model-dataset combinations
-# We have 2 models × 3 datasets = 6 combinations (array indices 0-5)
-# MODELS=("llama31" "llama31" "llama31" "qwen" "qwen" "qwen")
-# DATASETS=("triviaqa" "gsm8k" "mmlu" "triviaqa" "gsm8k" "mmlu")
-# PROBE_DIRS=("backend_llama/probe_mlp" "backend_llama/probe_mlp" "backend_llama/probe_mlp" "backend_qwen/probe_mlp" "backend_qwen/probe_mlp" "backend_qwen/probe_mlp")
-
-# Get the configuration for this array task
-# MODEL=${MODELS[$SLURM_ARRAY_TASK_ID]}
-# DATASET=${DATASETS[$SLURM_ARRAY_TASK_ID]}
-# PROBE_DIR=${PROBE_DIRS[$SLURM_ARRAY_TASK_ID]}
-
-# echo "=========================================="
-# echo "Running evaluation for:"
-# echo "  Model: $MODEL"
-# echo "  Dataset: $DATASET"
-# echo "  Probe: $PROBE_DIR"
-# echo "  Array Task ID: $SLURM_ARRAY_TASK_ID"
-# echo "=========================================="
-
-# # Run evaluation
-# python -m scripts.eval_probe \
-#     --model $MODEL \
-#     --probe_dir $PROBE_DIR \
-#     --use_hidden \
-#     --datasets $DATASET \
-#     --output results/${MODEL}_${DATASET}_eval.json
-
-# echo "Completed evaluation for $MODEL on $DATASET"
-
 MODELS=("llama31" "llama31" "llama31" "llama31" "llama31" "qwen" "qwen" "qwen" "qwen" "qwen")
 DATASETS=("triviaqa" "hotpotqa" "squad_v2" "gsm8k" "mmlu" "triviaqa" "hotpotqa" "squad_v2" "gsm8k" "mmlu")
 DATASET=${DATASETS[$SLURM_ARRAY_TASK_ID]}
@@ -56,7 +27,11 @@ echo "  Dataset: $DATASET"
 echo "  Array Task ID: $SLURM_ARRAY_TASK_ID"
 echo "=========================================="
 
-python -m scripts.eval_probe --model $MODEL --probe_dir backend_${MODEL}/probe_mlp --use_hidden --datasets $DATASET --output results/${MODEL}_${DATASET}_eval.json
+python -m scripts.eval_probe --model $MODEL --probe_dir backend_${MODEL}/probe_mlp --use_hidden --datasets $DATASET --output results/${MODEL}_${DATASET}_mlp_eval.json
+python -m scripts.eval_probe --model $MODEL --probe_dir backend_${MODEL}/probe_logreg --use_hidden --datasets $DATASET --output results/${MODEL}_${DATASET}_logreg_eval.json
+python -m scripts.eval_probe --model $MODEL --probe_dir backend_${MODEL}/probe_logreg_cal --use_hidden --datasets $DATASET --output results/${MODEL}_${DATASET}_logreg_cal_eval.json
+python -m scripts.eval_probe --model $MODEL --probe_dir backend_${MODEL}/probe_tree --use_hidden --datasets $DATASET --output results/${MODEL}_${DATASET}_tree_eval.json
+python -m scripts.eval_probe --model $MODEL --probe_dir backend_${MODEL}/probe_xform --use_hidden --datasets $DATASET --output results/${MODEL}_${DATASET}_xform_eval.json
 
 # python -m scripts.eval_probe --model llama31 --probe_dir backend_llama31/probe_mlp --use_hidden --datasets triviaqa
 # python -m scripts.eval_probe --model llama31 --probe_dir backend_llama31/probe_mlp --use_hidden --datasets hotpotqa

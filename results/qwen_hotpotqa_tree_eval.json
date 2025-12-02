@@ -1,0 +1,20 @@
+{
+  "model": "qwen",
+  "datasets": [
+    {
+      "dataset": "hotpotqa",
+      "probe_type": "tree",
+      "n_examples": 7405,
+      "model_accuracy": 0.09966239027683997,
+      "probe_accuracy": 0.8397029034436192,
+      "probe_precision": 0.3303099017384732,
+      "probe_recall": 0.592140921409214,
+      "probe_f1": 0.4240659873847647,
+      "tp": 437,
+      "fp": 886,
+      "tn": 5781,
+      "fn": 301,
+      "threshold": 0.269
+    }
+  ]
+}

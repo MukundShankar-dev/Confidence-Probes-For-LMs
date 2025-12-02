@@ -1,0 +1,20 @@
+{
+  "model": "qwen",
+  "datasets": [
+    {
+      "dataset": "triviaqa",
+      "probe_type": "logreg",
+      "n_examples": 11313,
+      "model_accuracy": 0.30495889684433836,
+      "probe_accuracy": 0.7665517546185804,
+      "probe_precision": 0.5937862276837468,
+      "probe_recall": 0.7423188405797101,
+      "probe_f1": 0.6597964704366868,
+      "tp": 2561,
+      "fp": 1752,
+      "tn": 6111,
+      "fn": 889,
+      "threshold": 0.351
+    }
+  ]
+}

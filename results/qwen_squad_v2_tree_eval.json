@@ -1,0 +1,20 @@
+{
+  "model": "qwen",
+  "datasets": [
+    {
+      "dataset": "squad_v2",
+      "probe_type": "tree",
+      "n_examples": 11873,
+      "model_accuracy": 0.4052893118841068,
+      "probe_accuracy": 0.6567843005137708,
+      "probe_precision": 0.5552888222055514,
+      "probe_recall": 0.7691188694929343,
+      "probe_f1": 0.6449420580291017,
+      "tp": 3701,
+      "fp": 2964,
+      "tn": 4097,
+      "fn": 1111,
+      "threshold": 0.269
+    }
+  ]
+}

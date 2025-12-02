@@ -112,18 +112,23 @@ class Gemma12B:
         """
         Final-only textual generation. Returns (inputs, gen) like GPTOSS.
         The `prompt` string is your few-shot-final-only block (from run_baseline).
+        
+        IMPORTANT: Gemma-3 has a known issue where setting pad_token_id can cause
+        it to generate only padding tokens. We set it to None to avoid this.
         """
         inputs = self._build_inputs(prompt)
-        self._stopper.set_start_len(int(inputs["input_ids"].shape[-1]))
+        start_len = int(inputs["input_ids"].shape[-1])
+        self._stopper.set_start_len(start_len)
 
+        # CRITICAL FIX: Don't set pad_token_id - Gemma-3 will generate pad tokens infinitely
         gen = self.model.generate(
             **inputs,
             max_new_tokens=self.max_new_tokens,
             do_sample=False,
             return_dict_in_generate=True,
             output_scores=True,
-            output_hidden_states=False,
-            pad_token_id=self.tok.eos_token_id,
+            output_hidden_states=True,  # Enable for collect_internals.py
+            pad_token_id=None,  # CRITICAL: Avoid pad token generation loop
             eos_token_id=self.tok.eos_token_id,
             use_cache=True,
             stopping_criteria=StoppingCriteriaList([self._stopper]),

@@ -1,0 +1,20 @@
+{
+  "model": "llama31",
+  "datasets": [
+    {
+      "dataset": "squad_v2",
+      "probe_type": "mlp",
+      "n_examples": 11873,
+      "model_accuracy": 0.11555630421965805,
+      "probe_accuracy": 0.9008675145287628,
+      "probe_precision": 0.5676613462873005,
+      "probe_recall": 0.5962099125364432,
+      "probe_f1": 0.581585495911838,
+      "tp": 818,
+      "fp": 623,
+      "tn": 9878,
+      "fn": 554,
+      "threshold": 0.327
+    }
+  ]
+}

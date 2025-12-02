@@ -1,0 +1,20 @@
+{
+  "model": "qwen",
+  "datasets": [
+    {
+      "dataset": "hotpotqa",
+      "probe_type": "logreg_cal",
+      "n_examples": 7405,
+      "model_accuracy": 0.09966239027683997,
+      "probe_accuracy": 0.8910195813639433,
+      "probe_precision": 0.45692883895131087,
+      "probe_recall": 0.4959349593495935,
+      "probe_f1": 0.47563352826510724,
+      "tp": 366,
+      "fp": 435,
+      "tn": 6232,
+      "fn": 372,
+      "threshold": 0.347
+    }
+  ]
+}

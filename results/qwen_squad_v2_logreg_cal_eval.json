@@ -1,0 +1,20 @@
+{
+  "model": "qwen",
+  "datasets": [
+    {
+      "dataset": "squad_v2",
+      "probe_type": "logreg_cal",
+      "n_examples": 11873,
+      "model_accuracy": 0.4052893118841068,
+      "probe_accuracy": 0.7203739577191948,
+      "probe_precision": 0.6625980819529207,
+      "probe_recall": 0.6317539484621779,
+      "probe_f1": 0.6468085106382979,
+      "tp": 3040,
+      "fp": 1548,
+      "tn": 5513,
+      "fn": 1772,
+      "threshold": 0.347
+    }
+  ]
+}

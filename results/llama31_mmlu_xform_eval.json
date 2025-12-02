@@ -1,0 +1,20 @@
+{
+  "model": "llama31",
+  "datasets": [
+    {
+      "dataset": "mmlu",
+      "probe_type": "xform",
+      "n_examples": 1531,
+      "model_accuracy": 0.1338994121489223,
+      "probe_accuracy": 0.8909209666884389,
+      "probe_precision": 0.5536723163841808,
+      "probe_recall": 0.9560975609756097,
+      "probe_f1": 0.701252236135957,
+      "tp": 196,
+      "fp": 158,
+      "tn": 1168,
+      "fn": 9,
+      "threshold": 0.359
+    }
+  ]
+}

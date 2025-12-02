@@ -60,17 +60,17 @@ except Exception:
 OPTIMAL_THRESHOLDS = {
     "llama31": {
         "mlp": 0.327,
-        "logreg": 0.304,
-        "logreg_cal": 0.308,
-        "tree": 0.210,
-        "xform": 0.243,
+        "logreg": 0.308,
+        "logreg_cal": 0.322,
+        "tree": 0.296,
+        "xform": 0.359,
     },
     "qwen": {
         "mlp": 0.314,
-        "logreg": 0.348,
-        "logreg_cal": 0.365,
-        "tree": 0.146,
-        "xform": 0.335,
+        "logreg": 0.351,
+        "logreg_cal": 0.347,
+        "tree": 0.269,
+        "xform": 0.211,
     }
 }
 

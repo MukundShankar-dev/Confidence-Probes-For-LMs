@@ -1,0 +1,20 @@
+{
+  "model": "llama31",
+  "datasets": [
+    {
+      "dataset": "triviaqa",
+      "probe_type": "logreg",
+      "n_examples": 11313,
+      "model_accuracy": 0.35286838150799965,
+      "probe_accuracy": 0.7345531689207107,
+      "probe_precision": 0.5880676758682102,
+      "probe_recall": 0.8271543086172345,
+      "probe_f1": 0.6874154262516916,
+      "tp": 3302,
+      "fp": 2313,
+      "tn": 5008,
+      "fn": 690,
+      "threshold": 0.308
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "model": "qwen",
+  "datasets": [
+    {
+      "dataset": "triviaqa",
+      "probe_type": "tree",
+      "n_examples": 11313,
+      "model_accuracy": 0.30495889684433836,
+      "probe_accuracy": 0.7227967824626536,
+      "probe_precision": 0.5315134484142915,
+      "probe_recall": 0.767536231884058,
+      "probe_f1": 0.6280834914611007,
+      "tp": 2648,
+      "fp": 2334,
+      "tn": 5529,
+      "fn": 802,
+      "threshold": 0.269
+    }
+  ]
+}

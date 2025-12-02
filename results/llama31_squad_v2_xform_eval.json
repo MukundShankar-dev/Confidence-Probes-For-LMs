@@ -1,0 +1,20 @@
+{
+  "model": "llama31",
+  "datasets": [
+    {
+      "dataset": "squad_v2",
+      "probe_type": "xform",
+      "n_examples": 11873,
+      "model_accuracy": 0.11555630421965805,
+      "probe_accuracy": 0.8974143013560179,
+      "probe_precision": 0.5522388059701493,
+      "probe_recall": 0.5932944606413995,
+      "probe_f1": 0.5720309205903021,
+      "tp": 814,
+      "fp": 660,
+      "tn": 9841,
+      "fn": 558,
+      "threshold": 0.359
+    }
+  ]
+}

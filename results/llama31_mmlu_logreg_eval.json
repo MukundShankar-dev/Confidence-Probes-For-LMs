@@ -1,0 +1,20 @@
+{
+  "model": "llama31",
+  "datasets": [
+    {
+      "dataset": "mmlu",
+      "probe_type": "logreg",
+      "n_examples": 1531,
+      "model_accuracy": 0.1338994121489223,
+      "probe_accuracy": 0.9196603527106466,
+      "probe_precision": 0.6357615894039735,
+      "probe_recall": 0.9365853658536586,
+      "probe_f1": 0.7573964497041421,
+      "tp": 192,
+      "fp": 110,
+      "tn": 1216,
+      "fn": 13,
+      "threshold": 0.308
+    }
+  ]
+}
