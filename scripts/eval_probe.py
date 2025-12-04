@@ -48,6 +48,32 @@ from src.models.qwen7b import Qwen7B
 from src.models.llama31_8b import Llama31_8B
 from src.data.datasets import load_qa, squad_em, squad_f1
 
+# ============================================================================
+# FEATURE FILTERING (must match train_probe.py)
+# ============================================================================
+
+SCALAR_KEYS_ALL = [
+    "model_confidence", "lp_mean", "seq_conf",
+    "entropy_mean", "entropy_std",
+    "margin_mean", "margin_min",
+    "rescore_logp", "answer_len",
+    "parsed_json_ok", "parsed_p_true_ok", "is_unknown",
+]
+
+NON_GENERALIZABLE_FEATURES = {
+    "answer_len",      # Dataset-specific
+    "is_unknown",      # Task-specific
+    "rescore_logp",    # Format-specific
+    "parsed_json_ok",  # Format-specific
+    "parsed_p_true_ok" # Format-specific
+}
+
+def get_scalar_keys(exclude_non_generalizable=False):
+    """Get scalar keys, optionally excluding non-generalizable features"""
+    if exclude_non_generalizable:
+        return [k for k in SCALAR_KEYS_ALL if k not in NON_GENERALIZABLE_FEATURES]
+    return SCALAR_KEYS_ALL
+
 # Speed optimizations
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -310,14 +336,10 @@ def run_probe_inference(probe, features):
     probe_type = probe["type"]
     model = probe["model"]
     use_hidden = probe["use_hidden"]
+    exclude_non_generalizable = probe.get("exclude_non_generalizable", False)
     
-    SCALAR_KEYS = [
-        "model_confidence", "lp_mean", "seq_conf",
-        "entropy_mean", "entropy_std",
-        "margin_mean", "margin_min",
-        "rescore_logp", "answer_len",
-        "parsed_json_ok", "parsed_p_true_ok", "is_unknown",
-    ]
+    # Get scalar keys (filtered if needed)
+    SCALAR_KEYS = get_scalar_keys(exclude_non_generalizable)
     VECTOR_KEYS = ["h_last_256", "h_pool_256", "h_last_mid_256", "h_pool_mid_256"]
     
     feat_dict = {}
@@ -375,11 +397,43 @@ def load_probe(probe_dir: str, use_hidden: bool = True, model_name: str = None):
         
         model = joblib.load(model_file)
         
+        # Detect if probe was trained with excluded features
+        n_features_expected = None
+        exclude_non_generalizable = False
+        
+        try:
+            if hasattr(model, 'n_features_in_'):
+                n_features_expected = model.n_features_in_
+            elif hasattr(model, 'named_steps'):
+                if 'impute' in model.named_steps:
+                    imputer = model.named_steps['impute']
+                    if hasattr(imputer, 'n_features_in_'):
+                        n_features_expected = imputer.n_features_in_
+            
+            if n_features_expected is not None:
+                n_scalar_all = len(SCALAR_KEYS_ALL)
+                n_scalar_gen = len([k for k in SCALAR_KEYS_ALL if k not in NON_GENERALIZABLE_FEATURES])
+                n_hidden = 4 * 256 if use_hidden else 0
+                
+                n_features_all = n_scalar_all + n_hidden  # 1036 with hidden
+                n_features_gen = n_scalar_gen + n_hidden  # 1031 with hidden
+                
+                if n_features_expected == n_features_gen:
+                    exclude_non_generalizable = True
+                    print(f"[Probe] Detected: trained WITHOUT non-generalizable features ({n_features_expected})")
+                elif n_features_expected == n_features_all:
+                    print(f"[Probe] Detected: trained WITH all features ({n_features_expected})")
+                else:
+                    print(f"[Probe] Warning: unexpected feature count {n_features_expected}")
+        except Exception as e:
+            print(f"[Probe] Could not detect feature count: {e}")
+        
         return {
             "type": probe_type,
             "model": model,
             "use_hidden": use_hidden,
             "threshold": threshold,
+            "exclude_non_generalizable": exclude_non_generalizable
         }
 
 def evaluate_on_dataset(model, probe, dataset_name: str, limit: int = None):

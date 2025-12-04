@@ -6,14 +6,14 @@
       "probe_type": "mlp",
       "n_examples": 1531,
       "model_accuracy": 0.09797517962116264,
-      "probe_accuracy": 0.9412148922273024,
-      "probe_precision": 0.6415094339622641,
-      "probe_recall": 0.9066666666666666,
-      "probe_f1": 0.7513812154696131,
-      "tp": 136,
-      "fp": 76,
-      "tn": 1305,
-      "fn": 14,
+      "probe_accuracy": 0.9359895493141738,
+      "probe_precision": 0.6192660550458715,
+      "probe_recall": 0.9,
+      "probe_f1": 0.733695652173913,
+      "tp": 135,
+      "fp": 83,
+      "tn": 1298,
+      "fn": 15,
       "threshold": 0.314
     }
   ]

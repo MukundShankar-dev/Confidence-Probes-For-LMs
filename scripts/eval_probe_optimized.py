@@ -35,6 +35,32 @@ from src.models.qwen7b import Qwen7B
 from src.models.llama31_8b import Llama31_8B
 from src.data.datasets import load_qa, squad_em, squad_f1
 
+# ============================================================================
+# FEATURE FILTERING (must match train_probe.py)
+# ============================================================================
+
+SCALAR_KEYS_ALL = [
+    "model_confidence", "lp_mean", "seq_conf",
+    "entropy_mean", "entropy_std",
+    "margin_mean", "margin_min",
+    "rescore_logp", "answer_len",
+    "parsed_json_ok", "parsed_p_true_ok", "is_unknown",
+]
+
+NON_GENERALIZABLE_FEATURES = {
+    "answer_len",      # Dataset-specific
+    "is_unknown",      # Task-specific
+    "rescore_logp",    # Format-specific
+    "parsed_json_ok",  # Format-specific
+    "parsed_p_true_ok" # Format-specific
+}
+
+def get_scalar_keys(exclude_non_generalizable=False):
+    """Get scalar keys, optionally excluding non-generalizable features"""
+    if exclude_non_generalizable:
+        return [k for k in SCALAR_KEYS_ALL if k not in NON_GENERALIZABLE_FEATURES]
+    return SCALAR_KEYS_ALL
+
 # Transformer probe architecture (must match train_probe.py)
 class DropPath(nn.Module):
     def __init__(self, p=0.0):
@@ -385,13 +411,45 @@ def load_probes(probe_dirs: List[str], use_hidden: bool, model_name: str) -> Lis
             with open(feature_file) as f:
                 feature_names = json.load(f)
         
+        # Detect if probe was trained with excluded features
+        n_features_expected = None
+        exclude_non_generalizable = False
+        
+        try:
+            if hasattr(probe_model, 'n_features_in_'):
+                n_features_expected = probe_model.n_features_in_
+            elif hasattr(probe_model, 'named_steps'):
+                if 'impute' in probe_model.named_steps:
+                    imputer = probe_model.named_steps['impute']
+                    if hasattr(imputer, 'n_features_in_'):
+                        n_features_expected = imputer.n_features_in_
+            
+            if n_features_expected is not None:
+                n_scalar_all = len(SCALAR_KEYS_ALL)
+                n_scalar_gen = len([k for k in SCALAR_KEYS_ALL if k not in NON_GENERALIZABLE_FEATURES])
+                n_hidden = 4 * 256 if use_hidden else 0
+                
+                n_features_all = n_scalar_all + n_hidden  # 1036 with hidden
+                n_features_gen = n_scalar_gen + n_hidden  # 1031 with hidden
+                
+                if n_features_expected == n_features_gen:
+                    exclude_non_generalizable = True
+                    print(f"[Probe] {probe_type}: trained WITHOUT non-generalizable features ({n_features_expected})")
+                elif n_features_expected == n_features_all:
+                    print(f"[Probe] {probe_type}: trained WITH all features ({n_features_expected})")
+                else:
+                    print(f"[Probe] {probe_type}: unexpected feature count {n_features_expected}")
+        except Exception as e:
+            pass  # Silently continue if detection fails
+        
         probe_info = {
             "type": probe_type,
             "model": probe_model,
             "threshold": threshold,
             "use_hidden": use_hidden,
             "feature_names": feature_names,
-            "path": str(probe_path)
+            "path": str(probe_path),
+            "exclude_non_generalizable": exclude_non_generalizable
         }
         
         probes.append(probe_info)
@@ -520,14 +578,9 @@ def run_probe_inference(probe: Dict, features: Dict) -> float:
     
     # Special handling for transformer probes
     if probe_type == "xform" and isinstance(probe_model, TinyTransformerProbe):
-        # Build feature tensor for transformer
-        SCALAR_KEYS = [
-            "model_confidence", "lp_mean", "seq_conf",
-            "entropy_mean", "entropy_std",
-            "margin_mean", "margin_min",
-            "rescore_logp", "answer_len",
-            "parsed_json_ok", "parsed_p_true_ok", "is_unknown",
-        ]
+        # Get scalar keys (filtered if needed)
+        exclude_non_generalizable = probe.get("exclude_non_generalizable", False)
+        SCALAR_KEYS = get_scalar_keys(exclude_non_generalizable)
         VECTOR_KEYS = ["h_last_256", "h_pool_256", "h_last_mid_256", "h_pool_mid_256"]
         
         # Build tokens_256 tensor
@@ -541,7 +594,7 @@ def run_probe_inference(probe: Dict, features: Dict) -> float:
                 vec = list(vec) + [0.0]*(256-len(vec)) if len(vec) < 256 else vec[:256]
                 tokens.append(vec)
         
-        # Add scalars (padded to 256, but only first 13 used)
+        # Add scalars (padded to 256, but only first N used where N=len(SCALAR_KEYS))
         scalar_vals = []
         for k in SCALAR_KEYS:
             val = features.get(k, 0.0)
@@ -572,14 +625,9 @@ def run_probe_inference(probe: Dict, features: Dict) -> float:
         return float(prob)
     
     # Standard sklearn/MLP probes
-    # Build feature dictionary (DataFrame will sort columns alphabetically)
-    SCALAR_KEYS = [
-        "model_confidence", "lp_mean", "seq_conf",
-        "entropy_mean", "entropy_std",
-        "margin_mean", "margin_min",
-        "rescore_logp", "answer_len",
-        "parsed_json_ok", "parsed_p_true_ok", "is_unknown",
-    ]
+    # Get scalar keys (filtered if needed)
+    exclude_non_generalizable = probe.get("exclude_non_generalizable", False)
+    SCALAR_KEYS = get_scalar_keys(exclude_non_generalizable)
     VECTOR_KEYS = ["h_last_256", "h_pool_256", "h_last_mid_256", "h_pool_mid_256"]
     
     feat_dict = {}

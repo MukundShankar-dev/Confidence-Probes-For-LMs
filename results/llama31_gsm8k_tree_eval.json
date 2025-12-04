@@ -6,13 +6,13 @@
       "probe_type": "tree",
       "n_examples": 1319,
       "model_accuracy": 0.000758150113722517,
-      "probe_accuracy": 0.9939347990902199,
+      "probe_accuracy": 0.9909021986353298,
       "probe_precision": 0.0,
       "probe_recall": 0.0,
       "probe_f1": 0.0,
       "tp": 0,
-      "fp": 7,
-      "tn": 1311,
+      "fp": 11,
+      "tn": 1307,
       "fn": 1,
       "threshold": 0.296
     }

@@ -6,14 +6,14 @@
       "probe_type": "logreg_cal",
       "n_examples": 7405,
       "model_accuracy": 0.11586765698852126,
-      "probe_accuracy": 0.8669817690749494,
-      "probe_precision": 0.4492406075139888,
-      "probe_recall": 0.655011655011655,
-      "probe_f1": 0.5329540066382171,
-      "tp": 562,
-      "fp": 689,
-      "tn": 5858,
-      "fn": 296,
+      "probe_accuracy": 0.8665766374071573,
+      "probe_precision": 0.44601328903654486,
+      "probe_recall": 0.6258741258741258,
+      "probe_f1": 0.5208535402521823,
+      "tp": 537,
+      "fp": 667,
+      "tn": 5880,
+      "fn": 321,
       "threshold": 0.322
     }
   ]

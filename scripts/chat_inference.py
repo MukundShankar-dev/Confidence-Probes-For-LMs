@@ -34,6 +34,32 @@ from src.models.qwen7b import Qwen7B
 console = Console()
 
 # ============================================================================
+# FEATURE FILTERING (must match train_probe.py)
+# ============================================================================
+
+SCALAR_KEYS_ALL = [
+    "model_confidence", "lp_mean", "seq_conf",
+    "entropy_mean", "entropy_std",
+    "margin_mean", "margin_min",
+    "rescore_logp", "answer_len",
+    "parsed_json_ok", "parsed_p_true_ok", "is_unknown",
+]
+
+NON_GENERALIZABLE_FEATURES = {
+    "answer_len",      # Dataset-specific
+    "is_unknown",      # Task-specific
+    "rescore_logp",    # Format-specific
+    "parsed_json_ok",  # Format-specific
+    "parsed_p_true_ok" # Format-specific
+}
+
+def get_scalar_keys(exclude_non_generalizable=False):
+    """Get scalar keys, optionally excluding non-generalizable features"""
+    if exclude_non_generalizable:
+        return [k for k in SCALAR_KEYS_ALL if k not in NON_GENERALIZABLE_FEATURES]
+    return SCALAR_KEYS_ALL
+
+# ============================================================================
 # RELATIVE CONFIDENCE SCORING
 # ============================================================================
 # Maps probe's actual output distribution (0.0-0.5, mean=0.18) to intuitive 0-1 scale
@@ -166,6 +192,40 @@ def load_probe(probe_dir, use_hidden=True, calibration_method=None):
     
     probe_model = joblib.load(model_file)
     
+    # Detect expected feature count to determine if features were excluded
+    n_features_expected = None
+    exclude_non_generalizable = False
+    
+    try:
+        # Try to get feature count from the probe
+        if hasattr(probe_model, 'n_features_in_'):
+            n_features_expected = probe_model.n_features_in_
+        elif hasattr(probe_model, 'named_steps'):
+            # Pipeline - check the imputer
+            if 'impute' in probe_model.named_steps:
+                imputer = probe_model.named_steps['impute']
+                if hasattr(imputer, 'n_features_in_'):
+                    n_features_expected = imputer.n_features_in_
+        
+        # Determine if non-generalizable features were excluded
+        if n_features_expected is not None:
+            n_scalar_all = len(SCALAR_KEYS_ALL)
+            n_scalar_gen = len([k for k in SCALAR_KEYS_ALL if k not in NON_GENERALIZABLE_FEATURES])
+            n_hidden = 4 * 256 if use_hidden else 0
+            
+            n_features_all = n_scalar_all + n_hidden  # 1036 with hidden
+            n_features_gen = n_scalar_gen + n_hidden  # 1031 with hidden
+            
+            if n_features_expected == n_features_gen:
+                exclude_non_generalizable = True
+                console.print(f"[yellow]Detected: Probe trained WITHOUT non-generalizable features ({n_features_expected} features)[/yellow]")
+            elif n_features_expected == n_features_all:
+                console.print(f"[green]Detected: Probe trained WITH all features ({n_features_expected} features)[/green]")
+            else:
+                console.print(f"[yellow]⚠ Unexpected feature count: {n_features_expected}[/yellow]")
+    except Exception as e:
+        console.print(f"[yellow]⚠ Could not detect feature count: {e}[/yellow]")
+    
     # Load calibration if requested
     calibration_model = None
     if calibration_method:
@@ -190,7 +250,8 @@ def load_probe(probe_dir, use_hidden=True, calibration_method=None):
         "model": probe_model,
         "use_hidden": use_hidden,
         "calibration": calibration_model,
-        "calibration_method": calibration_method
+        "calibration_method": calibration_method,
+        "exclude_non_generalizable": exclude_non_generalizable
     }
 
 def extract_features_chat(model, question, prompt_template, use_hidden=True):
@@ -401,16 +462,10 @@ def run_probe_inference(probe, features):
     
     probe_model = probe["model"]
     use_hidden = probe["use_hidden"]
+    exclude_non_generalizable = probe.get("exclude_non_generalizable", False)
     
-    # CRITICAL: Features must be in THIS exact order (not alphabetical!)
-    # This matches how train_probe.py builds features
-    SCALAR_KEYS = [
-        "model_confidence", "lp_mean", "seq_conf",
-        "entropy_mean", "entropy_std",
-        "margin_mean", "margin_min",
-        "rescore_logp", "answer_len",
-        "parsed_json_ok", "parsed_p_true_ok", "is_unknown",
-    ]
+    # Get scalar keys (filtered if probe was trained that way)
+    SCALAR_KEYS = get_scalar_keys(exclude_non_generalizable)
     VECTOR_KEYS = ["h_last_256", "h_pool_256", "h_last_mid_256", "h_pool_mid_256"]
     
     # DEBUG: Print extracted features

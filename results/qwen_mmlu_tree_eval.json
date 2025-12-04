@@ -6,14 +6,14 @@
       "probe_type": "tree",
       "n_examples": 1531,
       "model_accuracy": 0.09797517962116264,
-      "probe_accuracy": 0.9085564990202482,
-      "probe_precision": 0.525,
-      "probe_recall": 0.7,
-      "probe_f1": 0.6,
-      "tp": 105,
-      "fp": 95,
-      "tn": 1286,
-      "fn": 45,
+      "probe_accuracy": 0.9026779882429784,
+      "probe_precision": 0.502262443438914,
+      "probe_recall": 0.74,
+      "probe_f1": 0.5983827493261455,
+      "tp": 111,
+      "fp": 110,
+      "tn": 1271,
+      "fn": 39,
       "threshold": 0.269
     }
   ]
