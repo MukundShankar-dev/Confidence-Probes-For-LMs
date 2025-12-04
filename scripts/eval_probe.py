@@ -503,7 +503,7 @@ def evaluate_on_dataset(model, probe, dataset_name: str, limit: int = None):
             "probe_pred": probe_pred,
         })
     
-    # Compute metrics
+    # Compute metrics at multiple thresholds
     valid_results = [r for r in results if r["probe_pred"] is not None]
     
     if not valid_results:
@@ -511,35 +511,46 @@ def evaluate_on_dataset(model, probe, dataset_name: str, limit: int = None):
         return None
     
     y_true = [r["em"] for r in valid_results]
-    y_pred = [r["probe_pred"] for r in valid_results]
-    
-    # Compute confusion matrix elements
-    tp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 1 and yp == 1)
-    fp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 0 and yp == 1)
-    tn = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 0 and yp == 0)
-    fn = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 1 and yp == 0)
-    
-    accuracy = (tp + tn) / len(y_true) if len(y_true) > 0 else 0.0
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+    y_probs = [r["probe_prob"] for r in valid_results]
     
     # Model accuracy (EM)
     model_accuracy = sum(y_true) / len(y_true) if len(y_true) > 0 else 0.0
+    
+    # Compute metrics at multiple thresholds
+    thresholds_to_test = [0.3, 0.5, 0.7]
+    threshold_results = []
+    
+    for thresh in thresholds_to_test:
+        y_pred = [1 if p > thresh else 0 for p in y_probs]
+        
+        # Compute confusion matrix elements
+        tp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 1 and yp == 1)
+        fp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 0 and yp == 1)
+        tn = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 0 and yp == 0)
+        fn = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 1 and yp == 0)
+        
+        accuracy = (tp + tn) / len(y_true) if len(y_true) > 0 else 0.0
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        
+        threshold_results.append({
+            "threshold": thresh,
+            "accuracy": accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "tp": tp,
+            "fp": fp,
+            "tn": tn,
+            "fn": fn,
+        })
     
     metrics = {
         "dataset": dataset_name,
         "n_examples": len(valid_results),
         "model_accuracy": model_accuracy,
-        "probe_accuracy": accuracy,
-        "probe_precision": precision,
-        "probe_recall": recall,
-        "probe_f1": f1,
-        "tp": tp,
-        "fp": fp,
-        "tn": tn,
-        "fn": fn,
-        "threshold": threshold,
+        "threshold_results": threshold_results,
     }
     
     return metrics
@@ -592,65 +603,81 @@ def main():
     # Print summary table using tabulate
     from tabulate import tabulate
     
-    print("\n" + "=" * 100)
-    print("RESULTS SUMMARY")
-    print("=" * 100)
+    print("\n" + "=" * 120)
+    print("RESULTS SUMMARY - MULTIPLE THRESHOLDS")
+    print("=" * 120)
     
-    # Build table data
-    table_data = []
-    for m in all_metrics:
-        table_data.append([
-            m['dataset'],
-            m['n_examples'],
-            f"{m['model_accuracy']:.3f}",
-            f"{m['probe_accuracy']:.3f}",
-            f"{m['probe_precision']:.3f}",
-            f"{m['probe_recall']:.3f}",
-            f"{m['probe_f1']:.3f}",
-        ])
-    
-    # Add average row if multiple datasets
-    if len(all_metrics) > 1:
-        avg_model_acc = np.mean([m['model_accuracy'] for m in all_metrics])
-        avg_probe_acc = np.mean([m['probe_accuracy'] for m in all_metrics])
-        avg_precision = np.mean([m['probe_precision'] for m in all_metrics])
-        avg_recall = np.mean([m['probe_recall'] for m in all_metrics])
-        avg_f1 = np.mean([m['probe_f1'] for m in all_metrics])
+    # Build table data for each threshold
+    for thresh in [0.3, 0.5, 0.7]:
+        print(f"\n{'='*40} THRESHOLD = {thresh} {'='*40}")
         
-        table_data.append([
-            "─" * 15,  # separator
-            "─" * 6,
-            "─" * 7,
-            "─" * 7,
-            "─" * 7,
-            "─" * 7,
-            "─" * 7,
-        ])
-        table_data.append([
-            "AVERAGE",
-            "",
-            f"{avg_model_acc:.3f}",
-            f"{avg_probe_acc:.3f}",
-            f"{avg_precision:.3f}",
-            f"{avg_recall:.3f}",
-            f"{avg_f1:.3f}",
-        ])
+        table_data = []
+        for m in all_metrics:
+            # Find results for this threshold
+            thresh_result = next((tr for tr in m['threshold_results'] if tr['threshold'] == thresh), None)
+            if thresh_result:
+                table_data.append([
+                    m['dataset'],
+                    m['n_examples'],
+                    f"{m['model_accuracy']:.3f}",
+                    f"{thresh_result['accuracy']:.3f}",
+                    f"{thresh_result['precision']:.3f}",
+                    f"{thresh_result['recall']:.3f}",
+                    f"{thresh_result['f1']:.3f}",
+                ])
+        
+        # Add average row if multiple datasets
+        if len(all_metrics) > 1:
+            avg_model_acc = np.mean([m['model_accuracy'] for m in all_metrics])
+            avg_results = [next((tr for tr in m['threshold_results'] if tr['threshold'] == thresh), None) 
+                          for m in all_metrics]
+            avg_results = [r for r in avg_results if r is not None]
+            
+            if avg_results:
+                avg_probe_acc = np.mean([r['accuracy'] for r in avg_results])
+                avg_precision = np.mean([r['precision'] for r in avg_results])
+                avg_recall = np.mean([r['recall'] for r in avg_results])
+                avg_f1 = np.mean([r['f1'] for r in avg_results])
+                
+                table_data.append([
+                    "─" * 15,
+                    "─" * 6,
+                    "─" * 7,
+                    "─" * 7,
+                    "─" * 7,
+                    "─" * 7,
+                    "─" * 7,
+                ])
+                table_data.append([
+                    "AVERAGE",
+                    "",
+                    f"{avg_model_acc:.3f}",
+                    f"{avg_probe_acc:.3f}",
+                    f"{avg_precision:.3f}",
+                    f"{avg_recall:.3f}",
+                    f"{avg_f1:.3f}",
+                ])
+        
+        headers = ["Dataset", "N", "Model Acc", "Probe Acc", "Precision", "Recall", "F1"]
+        print(tabulate(table_data, headers=headers, tablefmt="grid"))
     
-    headers = ["Dataset", "N", "Model Acc", "Probe Acc", "Precision", "Recall", "F1"]
-    print(tabulate(table_data, headers=headers, tablefmt="grid"))
-    print("=" * 100)
+    print("\n" + "=" * 120)
     
-    # Print detailed confusion matrices
+    # Print detailed confusion matrices for threshold 0.5
     print("\n" + "=" * 100)
-    print("CONFUSION MATRICES (per dataset)")
+    print("CONFUSION MATRICES (Threshold = 0.5)")
     print("=" * 100)
     
     for m in all_metrics:
-        print(f"\n{m['dataset'].upper()} (threshold={m['threshold']:.3f}):")
+        thresh_result = next((tr for tr in m['threshold_results'] if tr['threshold'] == 0.5), None)
+        if not thresh_result:
+            continue
+            
+        print(f"\n{m['dataset'].upper()}:")
         cm_data = [
             ["", "Pred: Correct", "Pred: Wrong"],
-            [f"True: Correct", f"{m['tp']} (TP)", f"{m['fn']} (FN)"],
-            [f"True: Wrong", f"{m['fp']} (FP)", f"{m['tn']} (TN)"],
+            [f"True: Correct", f"{thresh_result['tp']} (TP)", f"{thresh_result['fn']} (FN)"],
+            [f"True: Wrong", f"{thresh_result['fp']} (FP)", f"{thresh_result['tn']} (TN)"],
         ]
         print(tabulate(cm_data, tablefmt="grid"))
     

@@ -398,8 +398,8 @@ def create_beautiful_plots(df, output_dir="results/figures"):
     print(f"✓ Saved: {output_dir}/model_acc_vs_probe.png")
     plt.close()
     
-    # 6. False Positive Rate Analysis
-    fig, ax = plt.subplots(figsize=(14, 8))
+    # 6. False Positive Rate Analysis - By Probe Type
+    fig, ax = plt.subplots(figsize=(16, 10))
     
     # Calculate FP rate (handle division by zero)
     df_plot = df.copy()
@@ -410,36 +410,58 @@ def create_beautiful_plots(df, output_dir="results/figures"):
     )
     df_plot['FP_Rate_pct'] = df_plot['FP_Rate'] * 100
     
-    # Group by dataset
-    x_pos = np.arange(len(df_plot['Dataset'].unique()))
-    width = 0.35
+    # Create a combined identifier for grouping
+    df_plot['Model_Probe'] = df_plot['Model'] + ' - ' + df_plot['Probe']
     
-    for idx, model in enumerate(df_plot['Model'].unique()):
-        model_data = df_plot[df_plot['Model'] == model].set_index('Dataset')
-        offset = (idx - 0.5) * width
+    # Get unique datasets and model-probe combinations
+    datasets = sorted(df_plot['Dataset'].unique())
+    model_probes = sorted(df_plot['Model_Probe'].unique())
+    
+    x_pos = np.arange(len(datasets))
+    n_bars = len(model_probes)
+    width = 0.8 / n_bars  # Adjust width based on number of bars
+    
+    # Create color map for probe types
+    probe_colors = {
+        'MLP': '#2E86AB',
+        'LogReg': '#A23B72', 
+        'cal': '#F18F01',
+        'Tree': '#C73E1D',
+        'Transformer': '#6A994E'
+    }
+    
+    for idx, model_probe in enumerate(model_probes):
+        data = df_plot[df_plot['Model_Probe'] == model_probe].set_index('Dataset')
+        # Reindex to match datasets order (fills missing with 0)
+        data = data.reindex(datasets, fill_value=0)
+        offset = (idx - n_bars/2 + 0.5) * width
+        
+        # Extract probe type for color
+        probe_type = model_probe.split(' - ')[1]
+        color = probe_colors.get(probe_type, '#999999')
         
         bars = ax.bar(x_pos + offset, 
-                     model_data['FP_Rate_pct'],
-                     width, label=model, color=colors[model],
-                     alpha=0.8, edgecolor='white', linewidth=2)
+                     data['FP_Rate_pct'].values,
+                     width, label=model_probe, color=color,
+                     alpha=0.8, edgecolor='white', linewidth=1)
         
-        # Add value labels (only if value > 0)
-        for bar in bars:
+        # Add value labels for significant values only (> 5%)
+        for i, bar in enumerate(bars):
             height = bar.get_height()
-            if height > 0:
+            if height > 5:
                 ax.text(bar.get_x() + bar.get_width()/2., height,
-                       f'{height:.1f}%',
-                       ha='center', va='bottom', fontsize=9, fontweight='bold')
+                       f'{height:.0f}',
+                       ha='center', va='bottom', fontsize=7, rotation=90)
     
     ax.set_xlabel('Dataset', fontsize=14, fontweight='bold')
     ax.set_ylabel('False Positive Rate (%)', fontsize=14, fontweight='bold')
-    ax.set_title('False Positive Rate by Dataset\n(Lower is better - probe correctly identifies wrong answers)',
+    ax.set_title('False Positive Rate by Dataset and Probe Type\n(Lower is better - probe correctly identifies wrong answers)',
                 fontsize=16, fontweight='bold', pad=20)
     ax.set_xticks(x_pos)
-    ax.set_xticklabels(df_plot['Dataset'].unique())
-    ax.legend(loc='upper right', frameon=True, shadow=True)
+    ax.set_xticklabels(datasets, fontsize=11)
+    ax.legend(loc='upper right', frameon=True, shadow=True, ncol=2, fontsize=9)
     ax.grid(axis='y', alpha=0.3, linestyle='--')
-    ax.set_ylim(0, max(df_plot['FP_Rate_pct'].max() * 1.2, 10))  # Handle zero case
+    ax.set_ylim(0, min(df_plot['FP_Rate_pct'].max() * 1.15, 100))  # Cap at 100%
     
     plt.tight_layout()
     plt.savefig(f'{output_dir}/false_positive_rate.png', dpi=300, bbox_inches='tight')

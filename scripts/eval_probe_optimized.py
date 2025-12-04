@@ -732,8 +732,10 @@ def evaluate_on_dataset(model, probes: List[Dict], dataset_name: str, limit: int
                 "probe_pred": probe_pred,
             })
     
-    # Compute metrics for each probe
+    # Compute metrics for each probe at multiple thresholds
     all_metrics = []
+    thresholds_to_test = [0.3, 0.5, 0.7]
+    
     for probe in probes:
         results = probe_results[probe["type"]]
         valid_results = [r for r in results if r["probe_pred"] is not None]
@@ -743,35 +745,43 @@ def evaluate_on_dataset(model, probes: List[Dict], dataset_name: str, limit: int
             continue
         
         y_true = [r["em"] for r in valid_results]
-        y_pred = [r["probe_pred"] for r in valid_results]
-        
-        # Confusion matrix
-        tp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 1 and yp == 1)
-        fp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 0 and yp == 1)
-        tn = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 0 and yp == 0)
-        fn = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 1 and yp == 0)
-        
-        accuracy = (tp + tn) / len(y_true) if len(y_true) > 0 else 0.0
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-        
+        y_probs = [r["probe_prob"] for r in valid_results]
         model_accuracy = sum(y_true) / len(y_true) if len(y_true) > 0 else 0.0
+        
+        # Compute metrics at multiple thresholds
+        threshold_results = []
+        for thresh in thresholds_to_test:
+            y_pred = [1 if p > thresh else 0 for p in y_probs]
+            
+            # Confusion matrix
+            tp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 1 and yp == 1)
+            fp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 0 and yp == 1)
+            tn = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 0 and yp == 0)
+            fn = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 1 and yp == 0)
+            
+            accuracy = (tp + tn) / len(y_true) if len(y_true) > 0 else 0.0
+            precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+            
+            threshold_results.append({
+                "threshold": thresh,
+                "accuracy": accuracy,
+                "precision": precision,
+                "recall": recall,
+                "f1": f1,
+                "tp": tp,
+                "fp": fp,
+                "tn": tn,
+                "fn": fn,
+            })
         
         metrics = {
             "dataset": dataset_name,
             "probe_type": probe["type"],
             "n_examples": len(valid_results),
             "model_accuracy": model_accuracy,
-            "probe_accuracy": accuracy,
-            "probe_precision": precision,
-            "probe_recall": recall,
-            "probe_f1": f1,
-            "tp": tp,
-            "fp": fp,
-            "tn": tn,
-            "fn": fn,
-            "threshold": probe["threshold"],
+            "threshold_results": threshold_results,
         }
         
         all_metrics.append(metrics)
