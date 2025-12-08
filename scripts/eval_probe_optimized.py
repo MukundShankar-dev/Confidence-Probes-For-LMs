@@ -306,19 +306,21 @@ def pack_256(vec: torch.Tensor):
     v = v[:256] if v.shape[-1] >= 256 else torch.nn.functional.pad(v, (0, 256 - v.shape[-1]))
     return [float(x) for x in v.cpu()]
 
-def initialize_model(model_name: str, max_new_tokens: int = 64):
-    """Initialize the model"""
+def initialize_model(model_name: str, model_id: str = None, max_new_tokens: int = 64):
+    """Initialize the model with optional custom model_id"""
     if model_name in ("llama", "llama31"):
+        default_model_id = "meta-llama/Meta-Llama-3.1-8B-Instruct"
         model = Llama31_8B(
-            model_id="meta-llama/Meta-Llama-3.1-8B-Instruct",
+            model_id=model_id or default_model_id,
             dtype="float16",
             device_map=None,
             max_new_tokens=max_new_tokens,
             cache_dir=None
         )
     elif model_name == "qwen":
+        default_model_id = "Qwen/Qwen2.5-7B-Instruct"
         model = Qwen7B(
-            model_id="Qwen/Qwen2.5-7B-Instruct",
+            model_id=model_id or default_model_id,
             dtype="float16",
             device_map=None,
             max_new_tokens=max_new_tokens,
@@ -332,7 +334,8 @@ def initialize_model(model_name: str, max_new_tokens: int = 64):
         props = torch.cuda.get_device_properties(i)
         print(f"[CUDA] {props.name} | {props.total_memory/1e9:.1f} GB")
     
-    print(f"[Model] Initialized: {model_name}")
+    actual_model_id = model_id or (default_model_id if model_name in ("llama", "llama31") else "Qwen/Qwen2.5-7B-Instruct")
+    print(f"[Model] Initialized: {model_name} ({actual_model_id})")
     return model
 
 def load_probes(probe_dirs: List[str], use_hidden: bool, model_name: str) -> List[Dict]:
@@ -792,6 +795,8 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate multiple probes on test splits (OPTIMIZED)")
     parser.add_argument("--model", choices=["llama", "llama31", "qwen"], required=True,
                        help="Model name (llama/llama31 and qwen both supported)")
+    parser.add_argument("--model_id", type=str, default=None,
+                       help="HuggingFace model ID (overrides default for --model)")
     parser.add_argument("--probe_dirs", type=str, required=True,
                        help="Comma-separated list of probe directories")
     parser.add_argument("--use_hidden", action="store_true",
@@ -810,6 +815,8 @@ def main():
     print("OPTIMIZED PROBE EVALUATION (Load model once, run all probes)")
     print("=" * 80)
     print(f"Model: {args.model}")
+    if args.model_id:
+        print(f"Model ID: {args.model_id}")
     print(f"Probe dirs: {args.probe_dirs}")
     print(f"Use hidden states: {args.use_hidden}")
     print(f"Datasets: {args.datasets}")
@@ -818,7 +825,7 @@ def main():
     print("=" * 80)
     
     # Initialize model ONCE
-    model = initialize_model(args.model, args.max_new_tokens)
+    model = initialize_model(args.model, args.model_id, args.max_new_tokens)
     
     # Load ALL probes ONCE
     probe_dirs = [d.strip() for d in args.probe_dirs.split(",")]

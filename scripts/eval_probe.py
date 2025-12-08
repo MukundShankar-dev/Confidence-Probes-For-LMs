@@ -187,18 +187,21 @@ def extract_answer_and_prob(text: str):
         return ans, p
     return text.strip(), None
 
-def initialize_model(model_name: str, max_new_tokens: int = 64):
+def initialize_model(model_name: str, model_id: str = None, max_new_tokens: int = 64):
+    """Initialize model with optional custom model_id"""
     if model_name == "llama31":
+        default_model_id = "meta-llama/Meta-Llama-3.1-8B-Instruct"
         model = Llama31_8B(
-            model_id="meta-llama/Meta-Llama-3.1-8B-Instruct",
+            model_id=model_id or default_model_id,
             dtype="float16",
             device_map=None,
             max_new_tokens=max_new_tokens,
             cache_dir=None
         )
     elif model_name == "qwen":
+        default_model_id = "Qwen/Qwen2.5-7B-Instruct"
         model = Qwen7B(
-            model_id="Qwen/Qwen2.5-7B-Instruct",
+            model_id=model_id or default_model_id,
             dtype="float16",
             device_map=None,
             max_new_tokens=max_new_tokens,
@@ -558,6 +561,8 @@ def evaluate_on_dataset(model, probe, dataset_name: str, limit: int = None):
 def main():
     parser = argparse.ArgumentParser(description="Evaluate probe on test splits")
     parser.add_argument("--model", choices=["llama31", "qwen"], required=True)
+    parser.add_argument("--model_id", type=str, default=None,
+                       help="HuggingFace model ID (overrides default for --model)")
     parser.add_argument("--probe_dir", type=str, required=True,
                        help="Path to probe directory")
     parser.add_argument("--use_hidden", action="store_true",
@@ -576,6 +581,8 @@ def main():
     print("PROBE EVALUATION ON TEST SPLITS")
     print("=" * 80)
     print(f"Model: {args.model}")
+    if args.model_id:
+        print(f"Model ID: {args.model_id}")
     print(f"Probe: {args.probe_dir}")
     print(f"Use hidden states: {args.use_hidden}")
     print(f"Datasets: {args.datasets}")
@@ -584,7 +591,7 @@ def main():
     print("=" * 80)
     
     # Initialize model
-    model = initialize_model(args.model, args.max_new_tokens)
+    model = initialize_model(args.model, args.model_id, args.max_new_tokens)
     
     # Load probe
     probe = load_probe(args.probe_dir, args.use_hidden, model_name=args.model)
