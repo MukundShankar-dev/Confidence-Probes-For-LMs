@@ -517,6 +517,260 @@ def _create_plots_for_threshold(df, output_dir, threshold, colors):
     plt.close()
 
 
+def create_threshold_comparison_plots(df, output_dir="results/figures"):
+    """Create plots comparing performance across thresholds"""
+    
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    print(f"\n{'='*60}")
+    print("Creating threshold comparison plots")
+    print(f"{'='*60}")
+    
+    # Color schemes
+    threshold_colors = {
+        0.3: '#E74C3C',  # Red - liberal
+        0.5: '#3498DB',  # Blue - balanced
+        0.7: '#2ECC71',  # Green - conservative
+    }
+    
+    model_colors = {
+        'Llama-3.1-8B': '#FF6B6B',
+        'Qwen2.5-7B': '#4ECDC4',
+    }
+    
+    # 1. Precision-Recall Curves by Threshold
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    
+    for idx, model in enumerate(sorted(df['Model'].unique())):
+        ax = axes[idx]
+        model_data = df[df['Model'] == model]
+        
+        # Plot each dataset as a line connecting the 3 threshold points
+        datasets = sorted(model_data['Dataset'].unique())
+        for dataset in datasets:
+            dataset_data = model_data[model_data['Dataset'] == dataset].sort_values('Threshold')
+            
+            # Skip if no data
+            if len(dataset_data) == 0:
+                continue
+            
+            precisions = dataset_data['Precision'].values
+            recalls = dataset_data['Recall'].values
+            
+            # Plot line
+            ax.plot(recalls, precisions, 'o-', linewidth=2, markersize=8, 
+                   label=dataset, alpha=0.7)
+            
+            # Annotate threshold points
+            for _, row in dataset_data.iterrows():
+                if row['Threshold'] == 0.5:  # Only label middle point to avoid clutter
+                    ax.annotate(f"{row['Threshold']:.1f}", 
+                              xy=(row['Recall'], row['Precision']),
+                              xytext=(5, 5), textcoords='offset points',
+                              fontsize=8, alpha=0.6)
+        
+        ax.set_xlabel('Recall', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Precision', fontsize=12, fontweight='bold')
+        ax.set_title(f'{model}\nPrecision-Recall Curves Across Thresholds',
+                    fontsize=14, fontweight='bold')
+        ax.legend(loc='best', fontsize=9)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(-0.05, 1.05)
+        ax.set_ylim(-0.05, 1.05)
+    
+    plt.tight_layout()
+    plt.savefig(f'{output_dir}/threshold_comparison_pr_curves.png', dpi=300, bbox_inches='tight')
+    print(f"✓ Saved: {output_dir}/threshold_comparison_pr_curves.png")
+    plt.close()
+    
+    # 2. F1 Score Heatmap by Threshold and Dataset
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    
+    for idx, model in enumerate(sorted(df['Model'].unique())):
+        ax = axes[idx]
+        model_data = df[df['Model'] == model]
+        
+        # Pivot table: Datasets × Thresholds
+        pivot = model_data.pivot_table(
+            values='F1',
+            index='Dataset',
+            columns='Threshold',
+            aggfunc='mean'
+        )
+        
+        # Create heatmap
+        im = ax.imshow(pivot.values, cmap='RdYlGn', aspect='auto', vmin=0, vmax=1)
+        
+        # Set ticks
+        ax.set_xticks(np.arange(len(pivot.columns)))
+        ax.set_yticks(np.arange(len(pivot.index)))
+        ax.set_xticklabels([f"{t:.1f}" for t in pivot.columns])
+        ax.set_yticklabels(pivot.index)
+        
+        # Annotate cells with F1 values
+        for i in range(len(pivot.index)):
+            for j in range(len(pivot.columns)):
+                text = ax.text(j, i, f'{pivot.values[i, j]:.3f}',
+                             ha="center", va="center", color="black", fontsize=10)
+        
+        ax.set_xlabel('Threshold', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Dataset', fontsize=12, fontweight='bold')
+        ax.set_title(f'{model}\nF1 Score by Threshold', fontsize=14, fontweight='bold')
+        
+        # Add colorbar
+        plt.colorbar(im, ax=ax, label='F1 Score')
+    
+    plt.tight_layout()
+    plt.savefig(f'{output_dir}/threshold_comparison_f1_heatmap.png', dpi=300, bbox_inches='tight')
+    print(f"✓ Saved: {output_dir}/threshold_comparison_f1_heatmap.png")
+    plt.close()
+    
+    # 3. Line Plot: F1 vs Threshold per Dataset
+    datasets = sorted(df['Dataset'].unique())
+    n_datasets = len(datasets)
+    n_cols = 3
+    n_rows = (n_datasets + n_cols - 1) // n_cols
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(18, 4*n_rows))
+    axes = axes.flatten() if n_datasets > 1 else [axes]
+    
+    for idx, dataset in enumerate(datasets):
+        ax = axes[idx]
+        dataset_data = df[df['Dataset'] == dataset]
+        
+        for model in sorted(dataset_data['Model'].unique()):
+            model_data = dataset_data[dataset_data['Model'] == model].sort_values('Threshold')
+            
+            ax.plot(model_data['Threshold'], model_data['F1'], 
+                   'o-', linewidth=2, markersize=8, label=model, 
+                   color=model_colors.get(model, '#999999'))
+        
+        ax.set_xlabel('Threshold', fontsize=11, fontweight='bold')
+        ax.set_ylabel('F1 Score', fontsize=11, fontweight='bold')
+        ax.set_title(dataset, fontsize=12, fontweight='bold')
+        ax.legend(loc='best')
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(-0.05, 1.05)
+        ax.set_xticks([0.3, 0.5, 0.7])
+    
+    # Hide extra subplots
+    for idx in range(n_datasets, len(axes)):
+        axes[idx].axis('off')
+    
+    plt.tight_layout()
+    plt.savefig(f'{output_dir}/threshold_comparison_f1_by_dataset.png', dpi=300, bbox_inches='tight')
+    print(f"✓ Saved: {output_dir}/threshold_comparison_f1_by_dataset.png")
+    plt.close()
+    
+    # 4. Bar Chart: Average F1 by Threshold
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Compute average F1 per model per threshold
+    avg_f1 = df.groupby(['Model', 'Threshold'])['F1'].mean().reset_index()
+    
+    models = sorted(avg_f1['Model'].unique())
+    thresholds = sorted(avg_f1['Threshold'].unique())
+    
+    x = np.arange(len(thresholds))
+    width = 0.35
+    
+    for idx, model in enumerate(models):
+        model_data = avg_f1[avg_f1['Model'] == model].sort_values('Threshold')
+        offset = (idx - 0.5) * width
+        
+        bars = ax.bar(x + offset, model_data['F1'].values, width, 
+                     label=model, color=model_colors.get(model, '#999999'),
+                     alpha=0.8, edgecolor='white', linewidth=2)
+        
+        # Add value labels
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height,
+                   f'{height:.3f}',
+                   ha='center', va='bottom', fontsize=10, fontweight='bold')
+    
+    ax.set_xlabel('Threshold', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Average F1 Score', fontsize=14, fontweight='bold')
+    ax.set_title('Average F1 Score Across All Datasets by Threshold',
+                fontsize=16, fontweight='bold', pad=20)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{t:.1f}" for t in thresholds])
+    ax.legend(loc='upper right', frameon=True, shadow=True)
+    ax.grid(axis='y', alpha=0.3, linestyle='--')
+    ax.set_ylim(0, 1)
+    
+    plt.tight_layout()
+    plt.savefig(f'{output_dir}/threshold_comparison_avg_f1.png', dpi=300, bbox_inches='tight')
+    print(f"✓ Saved: {output_dir}/threshold_comparison_avg_f1.png")
+    plt.close()
+    
+    # 5. Stacked metrics comparison
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    axes = axes.flatten()
+    
+    metrics = ['Precision', 'Recall', 'F1']
+    
+    for metric_idx, metric in enumerate(metrics):
+        # Left column: Llama
+        ax = axes[metric_idx * 2]
+        model = 'Llama-3.1-8B'
+        model_data = df[df['Model'] == model]
+        
+        datasets = sorted(model_data['Dataset'].unique())
+        thresholds = sorted(model_data['Threshold'].unique())
+        
+        x = np.arange(len(datasets))
+        width = 0.25
+        
+        for t_idx, threshold in enumerate(thresholds):
+            thresh_data = model_data[model_data['Threshold'] == threshold].sort_values('Dataset')
+            offset = (t_idx - 1) * width
+            
+            ax.bar(x + offset, thresh_data[metric].values, width,
+                  label=f"T={threshold:.1f}", 
+                  color=threshold_colors.get(threshold, '#999999'),
+                  alpha=0.8)
+        
+        ax.set_ylabel(metric, fontsize=11, fontweight='bold')
+        ax.set_title(f'{model} - {metric}', fontsize=12, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(datasets, rotation=45, ha='right')
+        ax.legend(loc='best', fontsize=9)
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, 1)
+        
+        # Right column: Qwen
+        ax = axes[metric_idx * 2 + 1]
+        model = 'Qwen2.5-7B'
+        model_data = df[df['Model'] == model]
+        
+        datasets = sorted(model_data['Dataset'].unique())
+        
+        x = np.arange(len(datasets))
+        
+        for t_idx, threshold in enumerate(thresholds):
+            thresh_data = model_data[model_data['Threshold'] == threshold].sort_values('Dataset')
+            offset = (t_idx - 1) * width
+            
+            ax.bar(x + offset, thresh_data[metric].values, width,
+                  label=f"T={threshold:.1f}",
+                  color=threshold_colors.get(threshold, '#999999'),
+                  alpha=0.8)
+        
+        ax.set_ylabel(metric, fontsize=11, fontweight='bold')
+        ax.set_title(f'{model} - {metric}', fontsize=12, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(datasets, rotation=45, ha='right')
+        ax.legend(loc='best', fontsize=9)
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, 1)
+    
+    plt.tight_layout()
+    plt.savefig(f'{output_dir}/threshold_comparison_metrics_breakdown.png', dpi=300, bbox_inches='tight')
+    print(f"✓ Saved: {output_dir}/threshold_comparison_metrics_breakdown.png")
+    plt.close()
+
+
 def main():
     print("="*80)
     print("COMPREHENSIVE PROBE EVALUATION ANALYSIS")
@@ -553,6 +807,9 @@ def main():
     
     create_beautiful_plots(df)
     
+    # Create threshold comparison plots
+    create_threshold_comparison_plots(df)
+    
     # Print probe ranking across all thresholds
     print("\n" + "="*80)
     print("PROBE RANKING BY THRESHOLD (average F1 across all datasets)")
@@ -578,11 +835,12 @@ def main():
     print("ANALYSIS COMPLETE")
     print("="*80)
     print()
-    print("Generated files organized by threshold:")
-    print("  - results/figures/threshold_X.X/*.png (7 visualization files per threshold)")
+    print("Generated files:")
+    print("  - results/figures/threshold_X.X/*.png (7 files per threshold)")
+    print("  - results/figures/threshold_comparison_*.png (5 comparison plots)")
     print("  - results/probe_evaluation_summary.csv")
     print()
-    print("Visualizations (per threshold):")
+    print("Per-threshold visualizations:")
     print("  1. model_comparison.png - Probe architecture comparison")
     print("  2. dataset_heatmap.png - Per-dataset performance heatmaps")
     print("  3. probe_by_dataset.png - Probe F1 scores by dataset")
@@ -590,6 +848,13 @@ def main():
     print("  5. confusion_matrices.png - Confusion matrices (MLP only)")
     print("  6. model_acc_vs_probe.png - Model accuracy vs probe F1")
     print("  7. false_positive_rate.png - FPR by dataset")
+    print()
+    print("Threshold comparison visualizations:")
+    print("  1. threshold_comparison_pr_curves.png - P-R curves across thresholds")
+    print("  2. threshold_comparison_f1_heatmap.png - F1 heatmap (Dataset × Threshold)")
+    print("  3. threshold_comparison_f1_by_dataset.png - F1 line plots per dataset")
+    print("  4. threshold_comparison_avg_f1.png - Average F1 bar chart")
+    print("  5. threshold_comparison_metrics_breakdown.png - All metrics by threshold")
     print()
 
 if __name__ == "__main__":
