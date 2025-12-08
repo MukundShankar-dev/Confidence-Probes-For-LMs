@@ -93,25 +93,46 @@ def read_eval_probe_output(results_dir="results"):
                 }
                 dataset = dataset_map.get(dataset_key, dataset_key)
                 
-                # Extract metrics
-                data.append({
-                    'Model': model,
-                    'Probe': probe,
-                    'Dataset': dataset,
-                    'N': dataset_result.get('n_examples', 0),
-                    'Model_Acc': dataset_result.get('model_accuracy', 0.0),
-                    'Probe_Acc': dataset_result.get('probe_accuracy', 0.0),
-                    'Precision': dataset_result.get('probe_precision', 0.0),
-                    'Recall': dataset_result.get('probe_recall', 0.0),
-                    'F1': dataset_result.get('probe_f1', 0.0),
-                    'Threshold': dataset_result.get('threshold', 0.0),
-                    'TP': dataset_result.get('tp', 0),
-                    'FP': dataset_result.get('fp', 0),
-                    'TN': dataset_result.get('tn', 0),
-                    'FN': dataset_result.get('fn', 0),
-                })
+                # Check if new format (threshold_results) or old format
+                if 'threshold_results' in dataset_result:
+                    # New format: multiple thresholds
+                    for thresh_result in dataset_result['threshold_results']:
+                        data.append({
+                            'Model': model,
+                            'Probe': probe,
+                            'Dataset': dataset,
+                            'N': dataset_result.get('n_examples', 0),
+                            'Model_Acc': dataset_result.get('model_accuracy', 0.0),
+                            'Probe_Acc': thresh_result.get('accuracy', 0.0),
+                            'Precision': thresh_result.get('precision', 0.0),
+                            'Recall': thresh_result.get('recall', 0.0),
+                            'F1': thresh_result.get('f1', 0.0),
+                            'Threshold': thresh_result.get('threshold', 0.0),
+                            'TP': thresh_result.get('tp', 0),
+                            'FP': thresh_result.get('fp', 0),
+                            'TN': thresh_result.get('tn', 0),
+                            'FN': thresh_result.get('fn', 0),
+                        })
+                else:
+                    # Old format: single threshold
+                    data.append({
+                        'Model': model,
+                        'Probe': probe,
+                        'Dataset': dataset,
+                        'N': dataset_result.get('n_examples', 0),
+                        'Model_Acc': dataset_result.get('model_accuracy', 0.0),
+                        'Probe_Acc': dataset_result.get('probe_accuracy', 0.0),
+                        'Precision': dataset_result.get('probe_precision', 0.0),
+                        'Recall': dataset_result.get('probe_recall', 0.0),
+                        'F1': dataset_result.get('probe_f1', 0.0),
+                        'Threshold': dataset_result.get('threshold', 0.0),
+                        'TP': dataset_result.get('tp', 0),
+                        'FP': dataset_result.get('fp', 0),
+                        'TN': dataset_result.get('tn', 0),
+                        'FN': dataset_result.get('fn', 0),
+                    })
             
-            print(f"✓ Loaded: {model} - {dataset} - {probe}")
+            print(f"✓ Loaded: {model} - {probe}")
             
         except Exception as e:
             print(f"Error reading {json_file}: {e}")
@@ -127,15 +148,42 @@ def read_eval_probe_output(results_dir="results"):
     return df
 
 def create_beautiful_plots(df, output_dir="results/figures"):
-    """Create publication-quality visualizations"""
+    """Create publication-quality visualizations for each threshold"""
     
     Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Get unique thresholds in the data
+    thresholds = sorted(df['Threshold'].unique())
+    
+    print(f"\nFound {len(thresholds)} threshold(s): {thresholds}")
     
     # Color scheme
     colors = {
         'Llama-3.1-8B': '#FF6B6B',  # Coral red
         'Qwen2.5-7B': '#4ECDC4',    # Turquoise
     }
+    
+    # Create plots for each threshold
+    for threshold in thresholds:
+        print(f"\n{'='*60}")
+        print(f"Creating plots for threshold = {threshold}")
+        print(f"{'='*60}")
+        
+        # Filter data for this threshold
+        df_thresh = df[df['Threshold'] == threshold].copy()
+        
+        # Create threshold-specific output directory
+        thresh_dir = f"{output_dir}/threshold_{threshold:.1f}"
+        Path(thresh_dir).mkdir(parents=True, exist_ok=True)
+        
+        # Call plotting functions with threshold-specific data and directory
+        _create_plots_for_threshold(df_thresh, thresh_dir, threshold, colors)
+    
+    print(f"\n✓ All visualizations saved to {output_dir}/")
+    print(f"  Organized by threshold subdirectories")
+
+def _create_plots_for_threshold(df, output_dir, threshold, colors):
+    """Create all plots for a specific threshold"""
     
     # 1. Probe Type Comparison - Grouped Bar Chart
     fig, ax = plt.subplots(figsize=(16, 8))
@@ -467,21 +515,6 @@ def create_beautiful_plots(df, output_dir="results/figures"):
     plt.savefig(f'{output_dir}/false_positive_rate.png', dpi=300, bbox_inches='tight')
     print(f"✓ Saved: {output_dir}/false_positive_rate.png")
     plt.close()
-    
-    print(f"\n✓ All visualizations saved to {output_dir}/")
-    print(f"    Total files: 7 visualization PNGs")
-    
-    # Print probe ranking
-    print("\n" + "="*60)
-    print("PROBE RANKING (by average F1 across all datasets)")
-    print("="*60)
-    probe_ranking = df.groupby(['Model', 'Probe'])['F1'].mean().reset_index()
-    probe_ranking = probe_ranking.sort_values(['Model', 'F1'], ascending=[True, False])
-    for model in probe_ranking['Model'].unique():
-        print(f"\n{model}:")
-        model_probes = probe_ranking[probe_ranking['Model'] == model]
-        for idx, row in enumerate(model_probes.itertuples(), 1):
-            print(f"  {idx}. {row.Probe:15s} F1={row.F1:.3f}")
 
 
 def main():
@@ -506,10 +539,10 @@ def main():
     
     # Print summary table
     print("="*80)
-    print("RESULTS SUMMARY")
+    print("RESULTS SUMMARY (all thresholds)")
     print("="*80)
     print()
-    print(df[['Model', 'Probe', 'Dataset', 'Model_Acc', 'Probe_Acc', 'Precision', 'Recall', 'F1']].to_string(index=False))
+    print(df[['Model', 'Probe', 'Dataset', 'Threshold', 'Model_Acc', 'Probe_Acc', 'Precision', 'Recall', 'F1']].to_string(index=False))
     print()
     
     # Create visualizations
@@ -520,6 +553,23 @@ def main():
     
     create_beautiful_plots(df)
     
+    # Print probe ranking across all thresholds
+    print("\n" + "="*80)
+    print("PROBE RANKING BY THRESHOLD (average F1 across all datasets)")
+    print("="*80)
+    
+    thresholds = sorted(df['Threshold'].unique())
+    for threshold in thresholds:
+        print(f"\n{'='*40} THRESHOLD = {threshold} {'='*40}")
+        df_thresh = df[df['Threshold'] == threshold]
+        probe_ranking = df_thresh.groupby(['Model', 'Probe'])['F1'].mean().reset_index()
+        probe_ranking = probe_ranking.sort_values(['Model', 'F1'], ascending=[True, False])
+        for model in probe_ranking['Model'].unique():
+            print(f"\n{model}:")
+            model_probes = probe_ranking[probe_ranking['Model'] == model]
+            for idx, row in enumerate(model_probes.itertuples(), 1):
+                print(f"  {idx}. {row.Probe:15s} F1={row.F1:.3f}")
+    
     # Save CSV
     df.to_csv('results/probe_evaluation_summary.csv', index=False)
     print(f"\n✓ Summary CSV saved to: results/probe_evaluation_summary.csv")
@@ -528,11 +578,11 @@ def main():
     print("ANALYSIS COMPLETE")
     print("="*80)
     print()
-    print("Generated files:")
-    print("  - results/figures/*.png (7 visualization files)")
+    print("Generated files organized by threshold:")
+    print("  - results/figures/threshold_X.X/*.png (7 visualization files per threshold)")
     print("  - results/probe_evaluation_summary.csv")
     print()
-    print("Visualizations:")
+    print("Visualizations (per threshold):")
     print("  1. model_comparison.png - Probe architecture comparison")
     print("  2. dataset_heatmap.png - Per-dataset performance heatmaps")
     print("  3. probe_by_dataset.png - Probe F1 scores by dataset")
