@@ -16,7 +16,7 @@
 # Tests probe transfer across model sizes:
 # - Qwen2.5-1.5B-Instruct (same family)
 # - Qwen3-4B-Instruct (new generation)
-# - Qwen3-8B (new generation, base model)
+# - Qwen2.5-14B-Instruct (new generation, base model)
 #
 # Strategy: Load model ONCE, run ALL probes (MLP, LogReg, Tree, etc.)
 # Array job: 3 models × 5 datasets = 15 tasks
@@ -33,8 +33,8 @@ MODEL_IDS=(
     "Qwen/Qwen2.5-1.5B-Instruct" "Qwen/Qwen2.5-1.5B-Instruct" "Qwen/Qwen2.5-1.5B-Instruct" "Qwen/Qwen2.5-1.5B-Instruct" "Qwen/Qwen2.5-1.5B-Instruct"
     # Qwen3-4B (5 datasets)  
     "Qwen/Qwen3-4B-Instruct-2507" "Qwen/Qwen3-4B-Instruct-2507" "Qwen/Qwen3-4B-Instruct-2507" "Qwen/Qwen3-4B-Instruct-2507" "Qwen/Qwen3-4B-Instruct-2507"
-    # Qwen3-8B (5 datasets)
-    "Qwen/Qwen3-8B" "Qwen/Qwen3-8B" "Qwen/Qwen3-8B" "Qwen/Qwen3-8B" "Qwen/Qwen3-8B"
+    # Qwen2.5-14b-Instruct (5 datasets)
+    "Qwen/Qwen2.5-14B-Instruct" "Qwen/Qwen2.5-14B-Instruct" "Qwen/Qwen2.5-14B-Instruct" "Qwen/Qwen2.5-14B-Instruct" "Qwen/Qwen2.5-14B-Instruct"
 )
 
 DATASETS=(
@@ -42,7 +42,7 @@ DATASETS=(
     "triviaqa" "hotpotqa" "squad_v2" "gsm8k" "mmlu"
     # Qwen3-4B
     "triviaqa" "hotpotqa" "squad_v2" "gsm8k" "mmlu"
-    # Qwen3-8B
+    # Qwen3-14B
     "triviaqa" "hotpotqa" "squad_v2" "gsm8k" "mmlu"
 )
 
@@ -51,8 +51,8 @@ MODEL_NAMES=(
     "qwen2.5_1.5b" "qwen2.5_1.5b" "qwen2.5_1.5b" "qwen2.5_1.5b" "qwen2.5_1.5b"
     # Qwen3-4B
     "qwen3_4b" "qwen3_4b" "qwen3_4b" "qwen3_4b" "qwen3_4b"
-    # Qwen3-8B
-    "qwen3_8b" "qwen3_8b" "qwen3_8b" "qwen3_8b" "qwen3_8b"
+    # Qwen3-14B
+    "qwen2.5_14b" "qwen2.5_14b" "qwen2.5_14b" "qwen2.5_14b" "qwen2.5_14b"
 )
 
 # Get this task's configuration

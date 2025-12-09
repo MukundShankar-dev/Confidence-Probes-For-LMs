@@ -271,10 +271,10 @@ def safe_json_extract(text: str):
         if think_end != -1:
             t = t[think_end + 8:].strip()  # Skip past </think>
         else:
-            # No closing tag, skip everything that looks like thinking
-            parts = t.split(">", 1)
-            if len(parts) > 1:
-                t = parts[1].strip()
+            # No closing tag, try to skip to JSON start
+            json_start = t.find("{")
+            if json_start > 0:
+                t = t[json_start:]
     
     # Strip markdown code blocks
     if t.startswith("```"):
@@ -294,26 +294,76 @@ def safe_json_extract(text: str):
         pass
     
     # Extract JSON object
-    start, end = t.find("{"), t.rfind("}")
+    start = t.find("{")
+    end = t.rfind("}")
+    
     if start != -1 and end != -1 and end > start:
         candidate = t[start:end + 1]
         
-        # Try to fix common JSON errors
-        # Fix single quotes around keys (common error)
-        candidate = candidate.replace("'answer'", '"answer"')
-        candidate = candidate.replace("'confidence'", '"confidence"')
-        candidate = candidate.replace("'p_true'", '"p_true"')
+        # Fix common JSON errors
+        # 1. Remove extra closing braces (e.g., "}}}" -> "}")
+        while candidate.endswith("}}") and candidate.count("}") > candidate.count("{"):
+            candidate = candidate[:-1]
+        
+        # 2. Fix missing opening quote on keys: {"answer': -> {"answer":
+        import re
+        candidate = re.sub(r'\{(\s*)"?(\w+)\':', r'{"\2":', candidate)  # Opening brace case
+        candidate = re.sub(r',(\s*)"?(\w+)\':', r', "\2":', candidate)  # After comma case
+        
+        # 3. Fix single quotes around keys and values
+        # First replace remaining single-quoted keys: 'answer': -> "answer":
+        candidate = re.sub(r"'(\w+)':", r'"\1":', candidate)
+        # Then replace single-quoted string values: 'value' -> "value"
+        candidate = re.sub(r":\s*'([^']*)'", r': "\1"', candidate)
+        
+        # 4. Fix European decimal notation: 0,95 -> 0.95
+        candidate = re.sub(r'(\d),(\d)', r'\1.\2', candidate)
+        
+        # 5. Fix common key variations - normalize all to p_true
+        candidate = candidate.replace('"confidence":', '"p_true":')
+        candidate = candidate.replace('"conf":', '"p_true":')
+        candidate = candidate.replace('"pTrue":', '"p_true":')
+        candidate = candidate.replace('"p_True":', '"p_true":')
+        
+        # 6. Remove spaces in key names
+        candidate = re.sub(r'"\s+(\w+)":', r'"\1":', candidate)  # " p_true": -> "p_true":
+        
+        # 7. Handle string values for p_true: "0.85" -> 0.85
+        candidate = re.sub(r'"p_true":\s*"([0-9.]+)"', r'"p_true": \1', candidate)
         
         try:
             return json.loads(candidate)
-        except Exception:
-            pass
+        except Exception as e:
+            # Last resort: try to manually extract answer and p_true
+            try:
+                import re
+                answer_match = re.search(r'"answer"?\s*:\s*"?([^",}]+)"?', candidate)
+                prob_match = re.search(r'"(?:p_true|confidence|conf)"?\s*:\s*"?([0-9.]+)"?', candidate)
+                
+                if answer_match:
+                    answer = answer_match.group(1).strip()
+                    prob = None
+                    if prob_match:
+                        try:
+                            prob = float(prob_match.group(1))
+                        except:
+                            pass
+                    return {"answer": answer, "p_true": prob}
+            except:
+                pass
     
     return None
 
 def extract_answer_and_prob(text: str):
     """Extract answer and probability from model output"""
     obj = safe_json_extract(text)
+    
+    # DEBUG: Print what we extracted
+    # if obj is None:
+    #     print(f"[DEBUG PARSE] Failed to parse: {text[:100]}")
+    # else:
+    #     print(f"[DEBUG PARSE] Extracted: {obj}")
+    
     if isinstance(obj, dict):
         norm = {str(k).strip().lower(): v for k, v in obj.items()}
         ans = (norm.get("answer") or norm.get("final") or norm.get("prediction") or "").strip()
@@ -770,7 +820,13 @@ def evaluate_on_dataset(model, probes: List[Dict], dataset_name: str, limit: int
         if idx < 3:
             print(f"\n[DEBUG] Example {idx+1}:")
             print(f"  Question: {question[:100]}...")
-            print(f"  Model raw output: {raw_text[:200]}...")
+            
+            # For <think> tags, show full output to debug
+            if "<think>" in raw_text.lower():
+                print(f"  Model raw output (FULL): {raw_text}")
+            else:
+                print(f"  Model raw output: {raw_text[:200]}...")
+            
             print(f"  Parsed answer: {answer}")
             print(f"  Gold answers: {gold_answers}")
             print(f"  EM: {em}")

@@ -26,10 +26,10 @@ def load_results():
     
     # Map model names to filename patterns
     # Files are named: {model_name}_{dataset}_{probe}_eval.json
+    # NOTE: Qwen3-8B excluded - it's a base model, not instruct-tuned
     models_to_test = {
         'Qwen2.5-1.5B': 'qwen2.5_1.5b',
         'Qwen3-4B': 'qwen3_4b',
-        'Qwen3-8B': 'qwen3_8b',
     }
     
     # Also load baseline if available
