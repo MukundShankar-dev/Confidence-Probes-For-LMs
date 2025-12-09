@@ -1,0 +1,46 @@
+{
+  "model": "qwen",
+  "datasets": [
+    {
+      "dataset": "gsm8k",
+      "probe_type": "mlp",
+      "n_examples": 1319,
+      "model_accuracy": 0.04927975739196361,
+      "threshold_results": [
+        {
+          "threshold": 0.3,
+          "accuracy": 0.9507202426080363,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "tp": 0,
+          "fp": 0,
+          "tn": 1254,
+          "fn": 65
+        },
+        {
+          "threshold": 0.5,
+          "accuracy": 0.9507202426080363,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "tp": 0,
+          "fp": 0,
+          "tn": 1254,
+          "fn": 65
+        },
+        {
+          "threshold": 0.7,
+          "accuracy": 0.9507202426080363,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "tp": 0,
+          "fp": 0,
+          "tn": 1254,
+          "fn": 65
+        }
+      ]
+    }
+  ]
+}

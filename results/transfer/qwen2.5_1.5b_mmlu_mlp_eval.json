@@ -1,0 +1,46 @@
+{
+  "model": "qwen",
+  "datasets": [
+    {
+      "dataset": "mmlu",
+      "probe_type": "mlp",
+      "n_examples": 1531,
+      "model_accuracy": 0.32984977139124755,
+      "threshold_results": [
+        {
+          "threshold": 0.3,
+          "accuracy": 0.6701502286087524,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "tp": 0,
+          "fp": 0,
+          "tn": 1026,
+          "fn": 505
+        },
+        {
+          "threshold": 0.5,
+          "accuracy": 0.6701502286087524,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "tp": 0,
+          "fp": 0,
+          "tn": 1026,
+          "fn": 505
+        },
+        {
+          "threshold": 0.7,
+          "accuracy": 0.6701502286087524,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "tp": 0,
+          "fp": 0,
+          "tn": 1026,
+          "fn": 505
+        }
+      ]
+    }
+  ]
+}

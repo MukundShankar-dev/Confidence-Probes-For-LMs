@@ -315,19 +315,21 @@ def pack_256(vec: torch.Tensor):
     v = v[:256] if v.shape[-1] >= 256 else torch.nn.functional.pad(v, (0, 256 - v.shape[-1]))
     return [float(x) for x in v.cpu()]
 
-def initialize_model(model_name: str, max_new_tokens: int = 64):
+def initialize_model(model_name: str, model_id: str = None, max_new_tokens: int = 64):
     """Initialize the model"""
     if model_name in ("llama", "llama31"):
+        default_id = "meta-llama/Meta-Llama-3.1-8B-Instruct"
         model = Llama31_8B(
-            model_id="meta-llama/Meta-Llama-3.1-8B-Instruct",
+            model_id=model_id or default_id,
             dtype="float16",
             device_map=None,
             max_new_tokens=max_new_tokens,
             cache_dir=None
         )
     elif model_name == "qwen":
+        default_id = "Qwen/Qwen2.5-7B-Instruct"
         model = Qwen7B(
-            model_id="Qwen/Qwen2.5-7B-Instruct",
+            model_id=model_id or default_id,
             dtype="float16",
             device_map=None,
             max_new_tokens=max_new_tokens,
@@ -801,6 +803,10 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate multiple probes on test splits (OPTIMIZED)")
     parser.add_argument("--model", choices=["llama", "llama31", "qwen"], required=True,
                        help="Model name (llama/llama31 and qwen both supported)")
+    parser.add_argument("--model_id", type=str, default=None,
+                       help="Hugging Face model ID (overrides default for --model)")
+    parser.add_argument("--model_name_prefix", type=str, default=None,
+                       help="Prefix for output filenames (e.g., qwen2.5_1.5b)")
     parser.add_argument("--probe_dirs", type=str, required=True,
                        help="Comma-separated list of probe directories")
     parser.add_argument("--use_hidden", action="store_true",
@@ -819,6 +825,8 @@ def main():
     print("OPTIMIZED PROBE EVALUATION (Load model once, run all probes)")
     print("=" * 80)
     print(f"Model: {args.model}")
+    if args.model_id:
+        print(f"Model ID: {args.model_id}")
     print(f"Probe dirs: {args.probe_dirs}")
     print(f"Use hidden states: {args.use_hidden}")
     print(f"Datasets: {args.datasets}")
@@ -827,7 +835,7 @@ def main():
     print("=" * 80)
     
     # Initialize model ONCE
-    model = initialize_model(args.model, args.max_new_tokens)
+    model = initialize_model(args.model, args.model_id, args.max_new_tokens)
     
     # Load ALL probes ONCE
     probe_dirs = [d.strip() for d in args.probe_dirs.split(",")]
@@ -855,9 +863,13 @@ def main():
         # Save results per probe
         for metrics in all_metrics:
             probe_type = metrics["probe_type"]
+            
+            # Use model_name_prefix if provided, otherwise use model name
+            model_prefix = args.model_name_prefix if args.model_name_prefix else args.model
+            
             output_file = os.path.join(
                 args.output_dir,
-                f"{args.model}_{dataset_name}_{probe_type}_eval.json"
+                f"{model_prefix}_{dataset_name}_{probe_type}_eval.json"
             )
             
             # Format to match analyze_results.py expectations
