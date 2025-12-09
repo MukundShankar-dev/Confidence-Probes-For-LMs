@@ -3,7 +3,7 @@
 #SBATCH --partition=vulcan-scavenger
 #SBATCH --qos=vulcan-scavenger
 #SBATCH --account=vulcan-abhinav
-#SBATCH --gres=gpu:rtxa6000:1
+#SBATCH --gres=gpu:rtxa5000:1
 #SBATCH --mem=64G
 #SBATCH --time=8:00:00
 #SBATCH -o logs/%x_%A_%a.out
@@ -77,6 +77,7 @@ mkdir -p results/transfer
 python -m scripts.eval_probe_optimized \
     --model qwen \
     --model_id "$MODEL_ID" \
+    --model_name_prefix "$MODEL_NAME" \
     --probe_dirs backend_qwen/probe_mlp,backend_qwen/probe_logreg,backend_qwen/probe_logreg_cal,backend_qwen/probe_tree,backend_qwen/probe_xform \
     --use_hidden \
     --datasets $DATASET \
@@ -87,30 +88,12 @@ echo "=========================================="
 echo "Completed: $MODEL_NAME on $DATASET"
 echo "=========================================="
 echo "Generated files in results/transfer/:"
-echo "  - qwen_${DATASET}_mlp_eval.json"
-echo "  - qwen_${DATASET}_logreg_eval.json"
-echo "  - qwen_${DATASET}_logreg_cal_eval.json"
-echo "  - qwen_${DATASET}_tree_eval.json"
-echo "  - qwen_${DATASET}_xform_eval.json"
+echo "  - ${MODEL_NAME}_${DATASET}_mlp_eval.json"
+echo "  - ${MODEL_NAME}_${DATASET}_logreg_eval.json"
+echo "  - ${MODEL_NAME}_${DATASET}_logreg_cal_eval.json"
+echo "  - ${MODEL_NAME}_${DATASET}_tree_eval.json"
+echo "  - ${MODEL_NAME}_${DATASET}_xform_eval.json"
 echo ""
-
-# Note: Files will be named with 'qwen' prefix since --model=qwen
-# We'll need to rename them based on actual model used
-# Do this after evaluation to preserve model_name in filename
-
-for probe_type in mlp logreg logreg_cal tree xform; do
-    src="results/transfer/qwen_${DATASET}_${probe_type}_eval.json"
-    dst="results/transfer/${MODEL_NAME}_${DATASET}_${probe_type}_eval.json"
-    
-    if [ -f "$src" ]; then
-        mv "$src" "$dst"
-        echo "  Renamed: $(basename $dst)"
-    fi
-done
-
-echo ""
-echo "Files renamed with model-specific prefix: ${MODEL_NAME}_*"
-echo "=========================================="
 
 # ==============================================================================
 # NOTES:
