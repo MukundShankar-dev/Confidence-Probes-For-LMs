@@ -3,7 +3,7 @@
 #SBATCH --partition=vulcan-scavenger
 #SBATCH --qos=vulcan-scavenger
 #SBATCH --account=vulcan-abhinav
-#SBATCH --gres=gpu:rtxa5000:1
+#SBATCH --gres=gpu:rtxa6000:1
 #SBATCH --mem=64G
 #SBATCH --time=8:00:00
 #SBATCH -o logs/%x_%A_%a.out

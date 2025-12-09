@@ -18,6 +18,7 @@ then all probes evaluate in parallel on the same features.
 import argparse
 import json
 import os
+import re
 import torch
 import torch.nn as nn
 import time
@@ -197,52 +198,45 @@ DATASET_TEST_SPLITS = {
 
 # Prompts (same as collect_internals.py)
 FEWSHOT_PROMPT_DEFAULT = """You are answering trivia questions.
-IMPORTANT: Return ONLY a single JSON object. Do not include any thinking, explanation, or additional text before or after the JSON.
+Return only a single JSON object with fields:
+- "answer": the short factual span (1–5 words, no punctuation)
+- "p_true": the probability (0.0–1.0) that this answer is correct (round to two decimals)
 
-Format:
-{{"answer": "short answer here", "p_true": 0.XX}}
-
-Rules:
-- "answer": Must be a SHORT final answer only (1-5 words, just the answer itself)
-  * For math problems: Give ONLY the final number (e.g., "18" not "16-3-4=9; 9*2=18")
-  * For facts: Give ONLY the name/thing (e.g., "Paris" not "The capital is Paris")
-- "p_true": Your confidence as a decimal between 0.0 and 1.0
-- Do NOT use <think> tags or any explanation before the JSON
-- Do NOT include units unless specifically asked (e.g., "3" not "3 bolts")
-
-Examples:
+Calibration guidance:
+- Report your true probability; do NOT inflate.
+- Overconfidence is penalized by proper scoring (Brier). If unsure, choose a lower value.
+- If multiple plausible answers exist or the question is ambiguous, reduce p_true appropriately.
 
 Q: Who wrote Hamlet?
 {{"answer": "William Shakespeare", "p_true": 0.95}}
 
-Q: What is 16 - 3 - 4, then multiply by 2?
-{{"answer": "18", "p_true": 0.98}}
-
 Q: What is the capital of France?
 {{"answer": "Paris", "p_true": 0.92}}
+
+Q: What is the capital of South Africa?
+{{"answer": "Pretoria", "p_true": 0.60}}
 
 Q: Which element has the symbol 'Au'?
 {{"answer": "Aluminum", "p_true": 0.15}}
 
-Q: A robe takes 2 bolts of blue fiber and half that much white fiber. How many bolts total?
-{{"answer": "3", "p_true": 0.95}}
+Q: Who authored the Voynich Manuscript?
+{{"answer": "Unknown", "p_true": 0.20}}
+
+Q: Which planet is known as the Red Planet?
+{{"answer": "Mars", "p_true": 0.85}}
 
 Q: {EVAL_QUESTION}
 """
 
 FEWSHOT_PROMPT_SQUADV2 = """You are answering extractive QA with possible unanswerable questions (SQuAD v2).
-IMPORTANT: Return ONLY a single JSON object. Do not include any thinking, explanation, or additional text.
+Return only a single JSON object with fields:
+- "answer": the short factual span (1–5 words, no punctuation). If unanswerable, output "Unknown".
+- "p_true": the probability (0.0–1.0) that this answer is correct (round to two decimals)
 
-Format:
-{{"answer": "short answer here", "p_true": 0.XX}}
-
-Rules:
-- "answer": SHORT final answer only (1-5 words). If unanswerable, use "Unknown"
-- "p_true": Your confidence as a decimal between 0.0 and 1.0
-- Do NOT use <think> tags or explanation before JSON
-- Give ONLY the answer itself, not calculations or reasoning
-
-Examples:
+Calibration guidance:
+- Predict "Unknown" when there is no sufficient answer in the context.
+- Report your true probability; do NOT inflate.
+- Overconfidence is penalized by proper scoring (Brier). If unsure, choose a lower value.
 
 Q: Who wrote Hamlet?
 {{"answer": "William Shakespeare", "p_true": 0.95}}
@@ -261,30 +255,21 @@ def build_prompt(question: str, dataset: str) -> str:
         return FEWSHOT_PROMPT_DEFAULT.format(EVAL_QUESTION=question)
 
 def safe_json_extract(text: str):
-    """Extract JSON from text, handling common issues"""
     t = text.strip()
     
-    # Strip <think>...</think> tags if present
-    if "<think>" in t.lower():
-        # Try to find content after </think>
-        think_end = t.lower().find("</think>")
-        if think_end != -1:
-            t = t[think_end + 8:].strip()  # Skip past </think>
-        else:
-            # No closing tag, try to skip to JSON start
-            json_start = t.find("{")
-            if json_start > 0:
-                t = t[json_start:]
+    # Normalize Unicode fancy quotes to ASCII quotes
+    # Models sometimes output " " (U+201C/U+201D) instead of " (U+0022)
+    t = t.replace('\u201c', '"')  # LEFT DOUBLE QUOTATION MARK
+    t = t.replace('\u201d', '"')  # RIGHT DOUBLE QUOTATION MARK
+    t = t.replace('\u2018', "'")  # LEFT SINGLE QUOTATION MARK
+    t = t.replace('\u2019', "'")  # RIGHT SINGLE QUOTATION MARK
     
-    # Strip markdown code blocks
     if t.startswith("```"):
         t = t.lstrip("`")
         if "\n" in t:
             t = t.split("\n", 1)[1].strip()
         if t.endswith("```"):
             t = t[:-3].strip()
-    
-    # Handle unicode escapes
     try:
         if "\\\"" in t or "\\\\\"" in t:
             t_try = bytes(t, "utf-8").decode("unicode_escape")
@@ -292,107 +277,20 @@ def safe_json_extract(text: str):
                 t = t_try
     except Exception:
         pass
-    
-    # Extract JSON object
-    start = t.find("{")
-    end = t.rfind("}")
-    
+    start, end = t.find("{"), t.rfind("}")
     if start != -1 and end != -1 and end > start:
         candidate = t[start:end + 1]
-        
-        # Fix common JSON errors
-        # 1. Remove extra closing braces (e.g., "}}}" -> "}")
-        while candidate.endswith("}}") and candidate.count("}") > candidate.count("{"):
-            candidate = candidate[:-1]
-        
-        # 2. Fix missing opening quote on keys: {"answer': -> {"answer":
-        import re
-        candidate = re.sub(r'\{(\s*)"?(\w+)\':', r'{"\2":', candidate)  # Opening brace case
-        candidate = re.sub(r',(\s*)"?(\w+)\':', r', "\2":', candidate)  # After comma case
-        
-        # 3. Fix single quotes around keys and values
-        # First replace remaining single-quoted keys: 'answer': -> "answer":
-        candidate = re.sub(r"'(\w+)':", r'"\1":', candidate)
-        # Then replace single-quoted string values: 'value' -> "value"
-        candidate = re.sub(r":\s*'([^']*)'", r': "\1"', candidate)
-        
-        # 4. Fix European decimal notation: 0,95 -> 0.95
-        candidate = re.sub(r'(\d),(\d)', r'\1.\2', candidate)
-        
-        # 5. Fix common key variations - normalize all to p_true
-        candidate = candidate.replace('"confidence":', '"p_true":')
-        candidate = candidate.replace('"conf":', '"p_true":')
-        candidate = candidate.replace('"pTrue":', '"p_true":')
-        candidate = candidate.replace('"p_True":', '"p_true":')
-        
-        # 6. Remove spaces in key names
-        candidate = re.sub(r'"\s+(\w+)":', r'"\1":', candidate)  # " p_true": -> "p_true":
-        
-        # 7. Handle string values for p_true: "0.85" -> 0.85
-        candidate = re.sub(r'"p_true":\s*"([0-9.]+)"', r'"p_true": \1', candidate)
-        
         try:
             return json.loads(candidate)
-        except Exception as e:
-            # Last resort: try to manually extract answer and p_true
-            try:
-                import re
-                answer_match = re.search(r'"answer"?\s*:\s*"?([^",}]+)"?', candidate)
-                prob_match = re.search(r'"(?:p_true|confidence|conf)"?\s*:\s*"?([0-9.]+)"?', candidate)
-                
-                if answer_match:
-                    answer = answer_match.group(1).strip()
-                    prob = None
-                    if prob_match:
-                        try:
-                            prob = float(prob_match.group(1))
-                        except:
-                            pass
-                    return {"answer": answer, "p_true": prob}
-            except:
-                pass
-    
+        except Exception:
+            pass
     return None
 
 def extract_answer_and_prob(text: str):
-    """Extract answer and probability from model output"""
     obj = safe_json_extract(text)
-    
-    # DEBUG: Print what we extracted
-    # if obj is None:
-    #     print(f"[DEBUG PARSE] Failed to parse: {text[:100]}")
-    # else:
-    #     print(f"[DEBUG PARSE] Extracted: {obj}")
-    
     if isinstance(obj, dict):
         norm = {str(k).strip().lower(): v for k, v in obj.items()}
         ans = (norm.get("answer") or norm.get("final") or norm.get("prediction") or "").strip()
-        
-        # Clean up answer
-        if ans:
-            # Remove common calculation strings (e.g., "16 - 3 - 4 = 9; 9 * 2 = 18")
-            # Extract just the final number after last = or semicolon
-            if "=" in ans or ";" in ans:
-                # Get the last part after = or ;
-                parts = ans.replace(";", "=").split("=")
-                if len(parts) > 1:
-                    ans = parts[-1].strip()
-            
-            # Remove units for numeric answers (e.g., "3 bolts" -> "3")
-            # Check if answer starts with a number
-            import re
-            numeric_match = re.match(r'^(\d+\.?\d*)', ans)
-            if numeric_match:
-                # If there's text after the number, it might be units - remove it
-                number_part = numeric_match.group(1)
-                rest = ans[len(number_part):].strip()
-                # Common unit words to strip
-                unit_words = ['bolts', 'bolt', 'dollars', 'dollar', 'cents', 'items', 'people', 
-                             'years', 'days', 'hours', 'minutes', 'kg', 'pounds', 'feet', 'meters']
-                if rest.lower() in unit_words:
-                    ans = number_part
-        
-        # Extract probability
         p = None
         for key in ["p_true", "confidence", "conf", "prob", "probability"]:
             if key in norm:
@@ -417,21 +315,19 @@ def pack_256(vec: torch.Tensor):
     v = v[:256] if v.shape[-1] >= 256 else torch.nn.functional.pad(v, (0, 256 - v.shape[-1]))
     return [float(x) for x in v.cpu()]
 
-def initialize_model(model_name: str, model_id: str = None, max_new_tokens: int = 64):
-    """Initialize the model with optional custom model_id"""
+def initialize_model(model_name: str, max_new_tokens: int = 64):
+    """Initialize the model"""
     if model_name in ("llama", "llama31"):
-        default_model_id = "meta-llama/Meta-Llama-3.1-8B-Instruct"
         model = Llama31_8B(
-            model_id=model_id or default_model_id,
+            model_id="meta-llama/Meta-Llama-3.1-8B-Instruct",
             dtype="float16",
             device_map=None,
             max_new_tokens=max_new_tokens,
             cache_dir=None
         )
     elif model_name == "qwen":
-        default_model_id = "Qwen/Qwen2.5-7B-Instruct"
         model = Qwen7B(
-            model_id=model_id or default_model_id,
+            model_id="Qwen/Qwen2.5-7B-Instruct",
             dtype="float16",
             device_map=None,
             max_new_tokens=max_new_tokens,
@@ -445,8 +341,7 @@ def initialize_model(model_name: str, model_id: str = None, max_new_tokens: int 
         props = torch.cuda.get_device_properties(i)
         print(f"[CUDA] {props.name} | {props.total_memory/1e9:.1f} GB")
     
-    actual_model_id = model_id or (default_model_id if model_name in ("llama", "llama31") else "Qwen/Qwen2.5-7B-Instruct")
-    print(f"[Model] Initialized: {model_name} ({actual_model_id})")
+    print(f"[Model] Initialized: {model_name}")
     return model
 
 def load_probes(probe_dirs: List[str], use_hidden: bool, model_name: str) -> List[Dict]:
@@ -816,22 +711,6 @@ def evaluate_on_dataset(model, probes: List[Dict], dataset_name: str, limit: int
         # Compute EM (ground truth)
         em = 1 if squad_em(answer, gold_answers) else 0
         
-        # DEBUG: Print first 3 examples to see what model outputs
-        if idx < 3:
-            print(f"\n[DEBUG] Example {idx+1}:")
-            print(f"  Question: {question[:100]}...")
-            
-            # For <think> tags, show full output to debug
-            if "<think>" in raw_text.lower():
-                print(f"  Model raw output (FULL): {raw_text}")
-            else:
-                print(f"  Model raw output: {raw_text[:200]}...")
-            
-            print(f"  Parsed answer: {answer}")
-            print(f"  Gold answers: {gold_answers}")
-            print(f"  EM: {em}")
-            print(f"  p_model: {p_model}")
-        
         # === EXTRACT FEATURES ONCE ===
         try:
             # Use the most permissive use_hidden (if ANY probe needs hidden states)
@@ -922,10 +801,6 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate multiple probes on test splits (OPTIMIZED)")
     parser.add_argument("--model", choices=["llama", "llama31", "qwen"], required=True,
                        help="Model name (llama/llama31 and qwen both supported)")
-    parser.add_argument("--model_id", type=str, default=None,
-                       help="HuggingFace model ID (overrides default for --model)")
-    parser.add_argument("--model_name_prefix", type=str, default=None,
-                       help="Prefix for output filenames (e.g., 'qwen2.5_1.5b'). If not provided, uses --model value.")
     parser.add_argument("--probe_dirs", type=str, required=True,
                        help="Comma-separated list of probe directories")
     parser.add_argument("--use_hidden", action="store_true",
@@ -944,8 +819,6 @@ def main():
     print("OPTIMIZED PROBE EVALUATION (Load model once, run all probes)")
     print("=" * 80)
     print(f"Model: {args.model}")
-    if args.model_id:
-        print(f"Model ID: {args.model_id}")
     print(f"Probe dirs: {args.probe_dirs}")
     print(f"Use hidden states: {args.use_hidden}")
     print(f"Datasets: {args.datasets}")
@@ -954,7 +827,7 @@ def main():
     print("=" * 80)
     
     # Initialize model ONCE
-    model = initialize_model(args.model, args.model_id, args.max_new_tokens)
+    model = initialize_model(args.model, args.max_new_tokens)
     
     # Load ALL probes ONCE
     probe_dirs = [d.strip() for d in args.probe_dirs.split(",")]
@@ -982,13 +855,9 @@ def main():
         # Save results per probe
         for metrics in all_metrics:
             probe_type = metrics["probe_type"]
-            
-            # Use model_name_prefix if provided, otherwise use args.model
-            model_prefix = args.model_name_prefix if args.model_name_prefix else args.model
-            
             output_file = os.path.join(
                 args.output_dir,
-                f"{model_prefix}_{dataset_name}_{probe_type}_eval.json"
+                f"{args.model}_{dataset_name}_{probe_type}_eval.json"
             )
             
             # Format to match analyze_results.py expectations
@@ -1000,15 +869,11 @@ def main():
             with open(output_file, "w") as f:
                 json.dump(output_data, f, indent=2)
             
-            # Get metrics at threshold 0.3 for display
-            thresh_03 = next((t for t in metrics['threshold_results'] if t['threshold'] == 0.3), metrics['threshold_results'][0])
-            
             print(f"  [{probe_type}] Saved: {output_file}")
-            print(f"    F1={thresh_03['f1']:.3f}, "
-                  f"Acc={thresh_03['accuracy']:.3f}, "
-                  f"P={thresh_03['precision']:.3f}, "
-                  f"R={thresh_03['recall']:.3f} "
-                  f"(at threshold={thresh_03['threshold']})")
+            print(f"    F1={metrics['probe_f1']:.3f}, "
+                  f"Acc={metrics['probe_accuracy']:.3f}, "
+                  f"P={metrics['probe_precision']:.3f}, "
+                  f"R={metrics['probe_recall']:.3f}")
     
     print("\n" + "=" * 80)
     print("EVALUATION COMPLETE")
