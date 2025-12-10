@@ -1,0 +1,46 @@
+{
+  "model": "qwen",
+  "datasets": [
+    {
+      "dataset": "squad_v2",
+      "probe_type": "mlp",
+      "n_examples": 11873,
+      "model_accuracy": 0.03705887307335973,
+      "threshold_results": [
+        {
+          "threshold": 0.3,
+          "accuracy": 0.9629411269266402,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "tp": 0,
+          "fp": 0,
+          "tn": 11433,
+          "fn": 440
+        },
+        {
+          "threshold": 0.5,
+          "accuracy": 0.9629411269266402,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "tp": 0,
+          "fp": 0,
+          "tn": 11433,
+          "fn": 440
+        },
+        {
+          "threshold": 0.7,
+          "accuracy": 0.9629411269266402,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "tp": 0,
+          "fp": 0,
+          "tn": 11433,
+          "fn": 440
+        }
+      ]
+    }
+  ]
+}

@@ -292,7 +292,7 @@ def extract_answer_and_prob(text: str):
         norm = {str(k).strip().lower(): v for k, v in obj.items()}
         ans = (norm.get("answer") or norm.get("final") or norm.get("prediction") or "").strip()
         p = None
-        for key in ["p_true", "confidence", "conf", "prob", "probability"]:
+        for key in ["p_true", "confidence", "conf", "prob", "probability", "ptrue"]:
             if key in norm:
                 try:
                     p = float(norm[key])
