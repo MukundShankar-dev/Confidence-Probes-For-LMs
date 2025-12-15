@@ -54,14 +54,6 @@ python -m scripts.collect_internals \
   --num_shards "$num_shards" --shard_id "$shard_id" \
   --out data/probe/hotpotqa/qwen/qwen_final_only_shard${shard_id}.jsonl
 
-# python -m scripts.collect_internals \
-#   --backend gemma \
-#   --model_id "google/gemma-3-12b-it" \
-#   --dataset hotpot_qa --split validation \
-#   --max_new_tokens 64 \
-#   --num_shards "$num_shards" --shard_id "$shard_id" \
-#   --out data/probe/hotpotqa/gemma/gemma_final_only_shard${shard_id}.jsonl
-
 python -m scripts.collect_internals \
   --backend llama31 \
   --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \

@@ -1,21 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Collect internals for a confidence probe:
-- Generates one answer per example (same flow as run_baseline)
-- Captures token-level scores, margins, entropies
+Collect internals for a confidence probe - STANDARD PROMPTS VERSION
+- Uses dataset-appropriate standard prompts (no JSON)
+- Captures token-level scores, margins, entropies from logits
 - Runs one teacher-forced forward pass to grab hidden states
-- Rescores the canonical JSON output (better than rescoring only the span)
+- Extracts answer from standard format output
 - Writes compact features + label (EM) to JSONL
 
-USAGE (examples):
-  python -m scripts.collect_internals \
-    --backend llama31 \
-    --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
-    --dataset triviaqa --split validation \
-    --max_new_tokens 64 \
-    --num_shards $num_shards --shard_id $shard_id \
-    --out data/probe/triviaqa/llama31_shard${shard_id}.jsonl
+Key change: Uses standard prompts for each dataset type, not JSON format
 """
 import argparse, json, os, re, math, time, sys
 import torch
@@ -38,155 +31,131 @@ try:
 except Exception:
     pass
 
-# ------- prompts -------
-FEWSHOT_FIXED_FINAL_ONLY_DEFAULT = """You are answering trivia questions.
-Return only a single JSON object with fields:
-- "answer": the short factual span (1–5 words, no punctuation)
-- "p_true": the probability (0.0–1.0) that this answer is correct (round to two decimals)
+# ========================================================================
+# STANDARD PROMPTS FOR EACH DATASET TYPE
+# ========================================================================
 
-Calibration guidance:
-- Report your true probability; do NOT inflate.
-- Overconfidence is penalized by proper scoring (Brier). If unsure, choose a lower value.
-- If multiple plausible answers exist or the question is ambiguous, reduce p_true appropriately.
+# For TriviaQA, HotpotQA - standard open-domain QA
+PROMPT_OPEN_QA = """Answer the following question with a short factual answer (1-5 words).
 
 Q: Who wrote Hamlet?
-{{"answer": "William Shakespeare", "p_true": 0.95}}
+A: William Shakespeare
 
 Q: What is the capital of France?
-{{"answer": "Paris", "p_true": 0.92}}
-
-Q: What is the capital of South Africa?
-{{"answer": "Pretoria", "p_true": 0.60}}
-
-Q: Which element has the symbol 'Au'?
-{{"answer": "Aluminum", "p_true": 0.15}}
-
-Q: Who authored the Voynich Manuscript?
-{{"answer": "Unknown", "p_true": 0.20}}
+A: Paris
 
 Q: Which planet is known as the Red Planet?
-{{"answer": "Mars", "p_true": 0.85}}
+A: Mars
 
-Q: {EVAL_QUESTION}
-"""
+Q: {QUESTION}
+A:"""
 
-FEWSHOT_FIXED_FINAL_ONLY_SQUADV2 = """You are answering extractive QA with possible unanswerable questions (SQuAD v2).
-Return only a single JSON object with fields:
-- "answer": the short factual span (1–5 words, no punctuation). If unanswerable, output "Unknown".
-- "p_true": the probability (0.0–1.0) that this answer is correct (round to two decimals)
+# For MMLU - standard multiple choice
+PROMPT_MMLU = """Answer the following multiple choice question by outputting only the letter (A, B, C, or D) of the correct answer.
 
-Calibration guidance:
-- Predict "Unknown" when there is no sufficient answer in the context.
-- Report your true probability; do NOT inflate.
-- Overconfidence is penalized by proper scoring (Brier). If unsure, choose a lower value.
+Question: What is the capital of France?
+A. London
+B. Berlin
+C. Paris
+D. Madrid
+Answer: C
 
-Q: Who wrote Hamlet?
-{{"answer": "William Shakespeare", "p_true": 0.95}}
+Question: Who wrote Romeo and Juliet?
+A. Charles Dickens
+B. William Shakespeare
+C. Mark Twain
+D. Jane Austen
+Answer: B
 
-Q: In 2007, who was the prime minister of Canada? (unanswerable)
-{{"answer": "Unknown", "p_true": 0.15}}
+{QUESTION}
+Answer:"""
 
-Q: {EVAL_QUESTION}
-"""
+# For GSM8K - standard math problem
+PROMPT_GSM8K = """Solve the following math problem. Show your reasoning and then provide the final numerical answer.
 
-_JSON_WARN_ONCE = False
+Q: Janet's ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?
+A: Janet's ducks lay 16 eggs per day. She eats 3 for breakfast, so 16 - 3 = 13 eggs remain. She uses 4 for muffins, so 13 - 4 = 9 eggs remain. She sells these 9 eggs for $2 each, so 9 * 2 = $18. The answer is 18.
 
-def build_prompt(q: str, dataset: str) -> str:
-    if dataset.lower() in ("squadv2", "squad_v2", "squad2"):
-        return FEWSHOT_FIXED_FINAL_ONLY_SQUADV2.format(EVAL_QUESTION=q)
+Q: {QUESTION}
+A:"""
+
+# For SQuAD v2 - extractive QA with unanswerable questions
+PROMPT_SQUADV2 = """Answer the question based on the context. If the question cannot be answered based on the context, respond with "unanswerable".
+
+Context: The Amazon rainforest is a moist broadleaf forest in South America. The majority of the forest is in Brazil.
+Question: Which country contains most of the Amazon rainforest?
+Answer: Brazil
+
+Context: Super Bowl 50 was held on February 7, 2016 at Levi's Stadium in Santa Clara, California.
+Question: Where was Super Bowl 50 held?
+Answer: Levi's Stadium
+
+Context: {CONTEXT}
+Question: {QUESTION}
+Answer:"""
+
+def build_prompt(question: str, dataset: str, context: str = None) -> str:
+    """Build standard prompt for the dataset type"""
+    dataset_lower = dataset.lower()
+    
+    if dataset_lower == "mmlu":
+        # For MMLU, question already contains the choices
+        return PROMPT_MMLU.format(QUESTION=question)
+    
+    elif dataset_lower == "gsm8k":
+        return PROMPT_GSM8K.format(QUESTION=question)
+    
+    elif dataset_lower in ("squadv2", "squad_v2", "squad2"):
+        return PROMPT_SQUADV2.format(CONTEXT=context or "", QUESTION=question)
+    
     else:
-        return FEWSHOT_FIXED_FINAL_ONLY_DEFAULT.format(EVAL_QUESTION=q)
+        # TriviaQA, HotpotQA, and other open-domain QA
+        return PROMPT_OPEN_QA.format(QUESTION=question)
 
-def safe_json_extract(text: str):
-    """Return best-effort JSON object from model text."""
-    global _JSON_WARN_ONCE
-    t = text.strip()
-
-    # strip code fences
-    if t.startswith("```"):
-        t = t.lstrip("`")
-        if "\n" in t:
-            t = t.split("\n", 1)[1].strip()
-        if t.endswith("```"):
-            t = t[:-3].strip()
-
-    # un-escape sequences like \" and \\\" if someone double-escaped
-    try:
-        if "\\\"" in t or "\\\\\"" in t:
-            t_try = bytes(t, "utf-8").decode("unicode_escape")
-            if "{" in t_try and "}" in t_try:
-                t = t_try
-    except Exception:
-        pass
-
-    start, end = t.find("{"), t.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        candidate = t[start:end + 1]
-        try:
-            return json.loads(candidate)
-        except Exception as e:
-            if not _JSON_WARN_ONCE:
-                print(f"[warn] JSON parse failed: {e}\nraw: {t[:200]}", file=sys.stderr)
-                _JSON_WARN_ONCE = True
-    return None
-
-def extract_answer_and_prob(text: str):
-    """
-    Robustly parse {"answer": "...", "p_true": 0.xx} with lots of tolerance.
-    Falls back to ("<raw>", None) on failure.
-    """
-    obj = safe_json_extract(text)
-    if isinstance(obj, dict):
-        norm = {str(k).strip().lower(): v for k, v in obj.items()}
-        ans = (norm.get("answer") or norm.get("final") or norm.get("prediction") or "").strip()
-        # accept p_true / confidence variants
-        p = None
-        for key in ["p_true", "confidence", "conf", "prob", "probability", "信心", "confidence_score", "confidence_level"]:
-            if key in norm:
-                try:
-                    p = float(norm[key])
-                except Exception:
-                    try:
-                        p = float(str(norm[key]).replace("%", "")) / 100.0
-                    except Exception:
-                        pass
-                break
-        if p is not None:
-            p = float(max(0.0, min(1.0, p if p <= 1.0 else p/100.0)))
-        return ans, p
-    # fallback: when no JSON
-    return text.strip(), None
-
-def token_logprobs_for_targets(logits, target_ids):
-    """
-    Given step-wise logits (list of tensors [1, V]) and target token ids (list[int]),
-    return per-step log-probs for those ids. Assumes alignment.
-    """
-    logps = []
-    for logit_step, tok_id in zip(logits, target_ids):
-        lsm = torch.log_softmax(logit_step[0].float(), dim=-1)
-        logps.append(float(lsm[int(tok_id)].item()))
-    return logps
-
-def rescore_mean_logprob(model, tok, prompt_text: str, target_text: str):
-    """
-    Compute mean log-prob of target_text when appended to prompt_text.
-    Uses a single forward (teacher-forced).
-    """
-    with torch.no_grad():
-        enc_prompt = tok(prompt_text, add_special_tokens=False, return_tensors="pt")
-        enc_target = tok(target_text, add_special_tokens=False, return_tensors="pt")
-        input_ids = torch.cat([enc_prompt["input_ids"], enc_target["input_ids"]], dim=-1).to(model.device)
-        attn = torch.ones_like(input_ids)
-        out = model(input_ids=input_ids, attention_mask=attn, use_cache=False, return_dict=True)
-        logits = out.logits[:, :-1, :]           # shift for next-token pred
-        target_slice = input_ids[:, enc_prompt["input_ids"].shape[-1]:]  # the target portion
-        logits_tgt = logits[:, -target_slice.shape[-1]:, :]              # align last K steps to target
-        step_logps = []
-        for t in range(target_slice.shape[-1]):
-            lsm = torch.log_softmax(logits_tgt[0, t].float(), dim=-1)
-            step_logps.append(float(lsm[int(target_slice[0, t])].item()))
-        return sum(step_logps) / max(1, len(step_logps))
+def extract_answer_standard(text: str, dataset: str) -> str:
+    """Extract answer from standard format output (no JSON parsing)"""
+    text = text.strip()
+    
+    dataset_lower = dataset.lower()
+    
+    if dataset_lower == "mmlu":
+        # For MMLU, extract just the letter
+        # Look for single letter A/B/C/D at start or after "Answer:"
+        match = re.search(r'\b([A-D])\b', text)
+        if match:
+            return match.group(1)
+        return text.split()[0] if text else ""
+    
+    elif dataset_lower == "gsm8k":
+        # For GSM8K, extract the final number
+        # Look for patterns like "The answer is 18" or just "18"
+        # Try to find number after "answer is" or at the end
+        answer_match = re.search(r'(?:answer is|equals?)\s*(\d+(?:\.\d+)?)', text, re.IGNORECASE)
+        if answer_match:
+            return answer_match.group(1)
+        
+        # Fall back to last number in text
+        numbers = re.findall(r'\d+(?:\.\d+)?', text)
+        if numbers:
+            return numbers[-1]
+        return text
+    
+    elif dataset_lower in ("squadv2", "squad_v2", "squad2"):
+        # For SQuAD, take first line or sentence
+        # Remove common prefixes like "Answer:" if present
+        text = re.sub(r'^(?:Answer|A):\s*', '', text, flags=re.IGNORECASE)
+        # Take first sentence/line
+        first_line = text.split('\n')[0].strip()
+        return first_line[:100]  # Cap length
+    
+    else:
+        # For open-domain QA (TriviaQA, HotpotQA)
+        # Take first line, remove common patterns
+        text = re.sub(r'^(?:Answer|A):\s*', '', text, flags=re.IGNORECASE)
+        first_line = text.split('\n')[0].strip()
+        # Remove trailing punctuation
+        first_line = re.sub(r'[.!?]+$', '', first_line)
+        return first_line[:100]  # Cap length
 
 def pack_256(vec: torch.Tensor):
     """L2-normalize then take first 256 dims."""
@@ -196,218 +165,245 @@ def pack_256(vec: torch.Tensor):
     v = v[:256] if v.shape[-1] >= 256 else torch.nn.functional.pad(v, (0, 256 - v.shape[-1]))
     return [float(x) for x in v.cpu()]
 
+def compute_margin(logits_flat):
+    """Margin between top-2 tokens (or 0 if only one token)."""
+    if logits_flat.numel() < 2:
+        return 0.0
+    top2 = torch.topk(logits_flat, k=2, largest=True).values
+    return float(top2[0] - top2[1])
+
+def compute_entropy(probs):
+    """Entropy of the distribution"""
+    if probs.numel() == 0:
+        return 0.0
+    eps = 1e-10
+    probs_safe = torch.clamp(probs, min=eps)
+    return float(-torch.sum(probs_safe * torch.log(probs_safe)))
+
+def collect_features(model, question: str, dataset: str, context: str = None, device="cuda"):
+    """
+    Generate answer and collect all features for probe training
+    Returns dict with features and generated answer
+    """
+    # Build standard prompt
+    prompt = build_prompt(question, dataset, context)
+    
+    # Generate with internals
+    inp, gen = model.generate_with_states(prompt)
+    
+    # Extract generated text
+    start_pos = inp["input_ids"].shape[-1]
+    new_ids = gen.sequences[:, start_pos:]
+    generated_text = model.tok.decode(new_ids[0], skip_special_tokens=True).strip()
+    
+    # Extract answer from standard format
+    answer = extract_answer_standard(generated_text, dataset)
+    
+    # Get hidden states
+    last_hs = gen.hidden_states[-1]  # Last layer
+    mid_hs = gen.hidden_states[len(gen.hidden_states)//2]  # Middle layer
+    
+    # Last token hidden states
+    h_last = last_hs[-1][0, -1, :] if len(last_hs) > 0 else None
+    h_last_mid = mid_hs[-1][0, -1, :] if len(mid_hs) > 0 else None
+    
+    # Mean-pooled hidden states
+    if len(last_hs) > 0:
+        h_pool = torch.stack([x[0, -1, :] for x in last_hs]).mean(dim=0)
+    else:
+        h_pool = None
+    
+    if len(mid_hs) > 0:
+        h_pool_mid = torch.stack([x[0, -1, :] for x in mid_hs]).mean(dim=0)
+    else:
+        h_pool_mid = None
+    
+    # Pack hidden states to 256 dims
+    h_last_256 = pack_256(h_last) if h_last is not None else None
+    h_pool_256 = pack_256(h_pool) if h_pool is not None else None
+    h_last_mid_256 = pack_256(h_last_mid) if h_last_mid is not None else None
+    h_pool_mid_256 = pack_256(h_pool_mid) if h_pool_mid is not None else None
+    
+    # Compute token-level features from scores
+    scores = gen.scores  # List of [1, vocab_size] tensors
+    
+    if len(scores) > 0:
+        # Stack scores: [seq_len, vocab_size]
+        all_logits = torch.stack([s[0] for s in scores], dim=0)
+        all_probs = torch.softmax(all_logits, dim=-1)
+        
+        # Compute per-token features
+        entropies = []
+        margins = []
+        lps = []
+        top_probs = []
+        
+        for i, (logit_row, prob_row) in enumerate(zip(all_logits, all_probs)):
+            # Entropy
+            entropies.append(compute_entropy(prob_row))
+            
+            # Margin
+            margins.append(compute_margin(logit_row))
+            
+            # Log prob of chosen token
+            chosen_id = new_ids[0, i].item()
+            lps.append(float(torch.log(prob_row[chosen_id] + 1e-10)))
+            
+            # Top-1 probability
+            top_probs.append(float(prob_row.max()))
+        
+        # Aggregate features
+        entropy_mean = float(torch.tensor(entropies).mean())
+        entropy_std = float(torch.tensor(entropies).std())
+        margin_mean = float(torch.tensor(margins).mean())
+        margin_min = float(torch.tensor(margins).min())
+        lp_mean = float(torch.tensor(lps).mean())
+        seq_conf = float(torch.tensor(top_probs).mean())
+    else:
+        entropy_mean = 0.0
+        entropy_std = 0.0
+        margin_mean = 0.0
+        margin_min = 0.0
+        lp_mean = 0.0
+        seq_conf = 0.0
+    
+    # Build feature dict
+    features = {
+        # Scalar features (probability-based, format-agnostic)
+        "entropy_mean": entropy_mean,
+        "entropy_std": entropy_std,
+        "margin_mean": margin_mean,
+        "margin_min": margin_min,
+        "lp_mean": lp_mean,
+        "seq_conf": seq_conf,
+        "model_confidence": None,  # Not available in standard format
+        
+        # Answer metadata
+        "answer_len": len(answer.split()),
+        "parsed_json_ok": False,  # N/A for standard format
+        "parsed_p_true_ok": False,  # N/A for standard format
+        "is_unknown": answer.lower() in ("unknown", "unanswerable"),
+        
+        # Rescore features (optional, could compute later)
+        "rescore_logp": lp_mean,  # Use mean as proxy
+        
+        # Hidden state features (256-dim each)
+        "h_last_256": h_last_256,
+        "h_pool_256": h_pool_256,
+        "h_last_mid_256": h_last_mid_256,
+        "h_pool_mid_256": h_pool_mid_256,
+        
+        # Generated output
+        "raw_output": generated_text,
+        "parsed_answer": answer,
+    }
+    
+    return features
+
 def main():
-    ap = argparse.ArgumentParser()
-    # data
-    ap.add_argument("--dataset", choices=["triviaqa", "hotpot_qa", "squad_v2", "gsm8k", "mmlu"], default="triviaqa")
-    ap.add_argument("--split", choices=["train", "validation", "test"], default="validation")
-    ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--num_shards", type=int, default=1)
-    ap.add_argument("--shard_id", type=int, default=0)
-
-    # model
-    ap.add_argument("--backend", choices=["gpt", "qwen", "gemma", "llama31", "llama32"], default="llama31")
-    ap.add_argument("--model_id", type=str, default=None)
-    ap.add_argument("--max_new_tokens", type=int, default=64)
-    # io
-    ap.add_argument("--out", type=str, required=True, help="Path to write probe dataset jsonl")
-    ap.add_argument("--verbose", action="store_true", default=False)
-    args = ap.parse_args()
-
-    hf_logging.set_verbosity_info()
-    hf_logging.enable_propagation()
-
-    # ---- load dataset ----
-    ds = load_qa(
-        args.dataset,
-        args.split,
-        args.limit,
-    )
-
-    # Shard AFTER loading so data is evenly distributed
-    if args.num_shards > 1:
-        ds = ds.shard(num_shards=args.num_shards, index=args.shard_id, contiguous=True)
-        print(f"[shard] Using shard {args.shard_id}/{args.num_shards} with {len(ds)} examples")
-
-    # ---- model init ----
-    if args.backend == "gpt":
-        model = GPTOSS(
-            model_id=args.model_id,
-            dtype="float16",
-            device_map=None,
-            max_new_tokens=args.max_new_tokens,
-            use_router_probs=True,
-            cache_dir=None,
-            use_chat_template=True,
-            reasoning_effort="low",
-            force_final_prefix=True,
-            final_allowance=32,
-            analysis_cap=512,
-        )
-    elif args.backend == "qwen":
-        mid = args.model_id or "Qwen/Qwen2.5-7B-Instruct"
-        model = Qwen7B(model_id=mid, dtype="float16", device_map=None, max_new_tokens=args.max_new_tokens, cache_dir=None)
-    elif args.backend == "gemma":
-        mid = args.model_id or "google/gemma-3-12b-it"
-        model = Gemma12B(model_id=mid, dtype="float16", device_map=None, max_new_tokens=args.max_new_tokens, cache_dir=None)
-    elif args.backend == "llama31":
-        mid = args.model_id or "meta-llama/Meta-Llama-3.1-8B-Instruct"
-        model = Llama31_8B(model_id=mid, dtype="float16", device_map=None, max_new_tokens=args.max_new_tokens, cache_dir=None)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--backend", choices=["llama31", "llama32", "qwen", "gemma", "gpt"], required=True)
+    parser.add_argument("--model_id", type=str, required=True)
+    parser.add_argument("--dataset", type=str, required=True)
+    parser.add_argument("--split", type=str, default="validation")
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--max_new_tokens", type=int, default=64)
+    parser.add_argument("--num_shards", type=int, default=1)
+    parser.add_argument("--shard_id", type=int, default=0)
+    parser.add_argument("--out", type=str, required=True)
+    
+    args = parser.parse_args()
+    
+    # Suppress transformers warnings
+    hf_logging.set_verbosity_error()
+    
+    print("="*80)
+    print("COLLECT INTERNALS - STANDARD PROMPTS VERSION")
+    print("="*80)
+    print(f"Backend: {args.backend}")
+    print(f"Model: {args.model_id}")
+    print(f"Dataset: {args.dataset} ({args.split})")
+    print(f"Shard: {args.shard_id}/{args.num_shards}")
+    print(f"Output: {args.out}")
+    print("="*80)
+    
+    # Load model
+    print("\nLoading model...")
+    if args.backend == "llama31":
+        model = Llama31_8B(args.model_id, max_new_tokens=args.max_new_tokens)
     elif args.backend == "llama32":
-        mid = args.model_id or "meta-llama/Llama-3.2-11B-Vision-Instruct"
-        model = Llama32_11B(model_id=mid, dtype="float16", device_map=None, max_new_tokens=args.max_new_tokens, cache_dir=None)
+        model = Llama32_11B(args.model_id, max_new_tokens=args.max_new_tokens)
+    elif args.backend == "qwen":
+        model = Qwen7B(args.model_id, max_new_tokens=args.max_new_tokens)
+    elif args.backend == "gemma":
+        model = Gemma12B(args.model_id, max_new_tokens=args.max_new_tokens)
+    elif args.backend == "gpt":
+        model = GPTOSS(args.model_id, max_new_tokens=args.max_new_tokens)
     else:
         raise ValueError(f"Unknown backend: {args.backend}")
-
-    # sanity: show GPU
-    if torch.cuda.is_available():
-        i = torch.cuda.current_device()
-        props = torch.cuda.get_device_properties(i)
-        print(f"[CUDA] {props.name} | {props.total_memory/1e9:.1f} GB")
-
-    tok = model.tok
-    hf_causal_lm = model.model  # underlying HF CausalLM
-    device = next(hf_causal_lm.parameters()).device
-
+    
+    print(f"Model loaded on: {next(model.model.parameters()).device}")
+    
+    # Load dataset
+    print(f"\nLoading dataset: {args.dataset}...")
+    dataset = load_qa(args.dataset, args.split, args.limit)
+    print(f"Loaded {len(dataset)} examples")
+    
+    # Shard the dataset
+    if args.num_shards > 1:
+        shard_size = len(dataset) // args.num_shards
+        start_idx = args.shard_id * shard_size
+        end_idx = start_idx + shard_size if args.shard_id < args.num_shards - 1 else len(dataset)
+        dataset = dataset[start_idx:end_idx]
+        print(f"Processing shard {args.shard_id}: examples {start_idx} to {end_idx}")
+    
+    # Ensure output directory exists
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    w = open(args.out, "w", encoding="utf-8")
-
-    bar = tqdm(ds, desc="collect", dynamic_ncols=True)
-    for idx, ex in enumerate(bar):
-        q, gold = ex["question"], ex["answers"]
-        prompt = build_prompt(q, args.dataset)
-
-        # ---- generate (your wrapper returns (inp, gen)) ----
-        t0 = time.perf_counter()
-        inp, gen = model.generate_with_states(prompt)
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        dt = time.perf_counter() - t0
-
-        start = inp["input_ids"].shape[-1]
-        new_ids = gen.sequences[:, start:]
-        raw_text = model.tok.decode(new_ids[0], skip_special_tokens=True).strip()
-
-        # parse model JSON
-        ans_text, p_model = extract_answer_and_prob(raw_text)
-        if not ans_text:
-            ans_text = raw_text
-
-        # token-level stats from scores
-        scores = gen.scores or []
-        T = len(scores)
-        gen_ids_seq = new_ids[0].tolist()
-        # exclude final step for "content" stats
-        content_len = max(1, T - 1) if T > 1 else T
-
-        step_ent = []
-        margins = []
-        step_logp = []
-        for t in range(T):
-            logits = scores[t][0].float()
-            top2 = torch.topk(logits, k=2).values
-            margins.append(float(top2[0] - top2[1]))
-
-            probs = torch.softmax(logits, dim=-1)
-            ent = float(-(probs * torch.log(probs.clamp_min(1e-12))).sum().item())
-            step_ent.append(ent)
-
-            tok_id = gen_ids_seq[t] if t < len(gen_ids_seq) else None
-            if tok_id is not None:
-                lsm = torch.log_softmax(logits, dim=-1)
-                step_logp.append(float(lsm[tok_id].item()))
-
-        entropy_mean = float(sum(step_ent[:content_len]) / content_len) if step_ent else None
-        entropy_last = float(step_ent[-1]) if step_ent else None
-        entropy_std = float(torch.tensor(step_ent[:content_len]).std().item()) if len(step_ent[:content_len]) > 1 else None
-
-        margin_mean = float(sum(margins[:content_len]) / content_len) if margins else None
-        margin_last = float(margins[-1]) if margins else None
-        margin_min = float(min(margins[:content_len])) if content_len > 0 and margins else None
-
-        lp_mean = float(sum(step_logp[:content_len]) / content_len) if step_logp else None
-        seq_conf = math.exp(lp_mean) if lp_mean is not None else None  # geometric mean token prob
-
-        # ---- teacher-forced forward to fetch hidden states ----
-        with torch.no_grad():
-            full_ids = torch.cat([inp["input_ids"].to(device), new_ids.to(device)], dim=-1)
-            attn = torch.ones_like(full_ids)
-            out = hf_causal_lm(input_ids=full_ids, attention_mask=attn,
-                                output_hidden_states=True, use_cache=False, return_dict=True)
-            hs_final = out.hidden_states[-1][0]  # [T, d]
-            gen_len = new_ids.shape[-1]
-            h_ans = hs_final[-gen_len:]
-            h_last = h_ans[-1] if h_ans.shape[0] > 0 else None
-            h_pool = h_ans.mean(dim=0) if h_ans.shape[0] > 0 else None
-
-            mid_ix = len(out.hidden_states) // 2
-            hs_mid = out.hidden_states[mid_ix][0]
-            h_ans_mid = hs_mid[-gen_len:]
-            h_last_mid = h_ans_mid[-1] if h_ans_mid.shape[0] > 0 else None
-            h_pool_mid = h_ans_mid.mean(dim=0) if h_ans_mid.shape[0] > 0 else None
-
-        h_last_256 = pack_256(h_last) if h_last is not None else None
-        h_pool_256 = pack_256(h_pool) if h_pool is not None else None
-        h_last_mid_256 = pack_256(h_last_mid) if h_last_mid is not None else None
-        h_pool_mid_256 = pack_256(h_pool_mid) if h_pool_mid is not None else None
-
-        # ---- rescore canonical JSON ----
-        # Canonicalize compact JSON (no extra spaces; stable formatting)
-        safe_ans = ans_text.replace('"', '\\"')
-        pt = p_model if p_model is not None else 0.00
-        canon_json = f'{{"answer":"{safe_ans}","p_true":{pt:.2f}}}'
-        rescore_lp = rescore_mean_logprob(hf_causal_lm, tok, prompt, canon_json)
-
-        # ---- labels ----
-        em_i = 1 if squad_em(ans_text, gold) else 0
-        f1_i = squad_f1(ans_text, gold)
-
-        row = {
-            "idx": ex.get("idx", idx),
-            "question": q,
-            "prediction": ans_text,
-            "references": gold,
-            "em": em_i,
-            "f1": f1_i,
-
-            # model-decode side
-            "raw_output": raw_text,
-            "gen_tokens": int(gen_len),
-            "gen_time": round(dt, 3),
-
-            # parsed prob from model (may be None)
-            "model_confidence": p_model,
-
-            # token stats
-            "lp_mean": lp_mean,
-            "seq_conf": seq_conf,
-            "entropy_mean": entropy_mean,
-            "entropy_last": entropy_last,
-            "entropy_std": entropy_std,
-            "margin_mean": margin_mean,
-            "margin_last": margin_last,
-            "margin_min": margin_min,
-
-            # hidden-state packs
-            "h_last_256": h_last_256,
-            "h_pool_256": h_pool_256,
-            "h_last_mid_256": h_last_mid_256,
-            "h_pool_mid_256": h_pool_mid_256,
-
-            # rescoring aligned with prompt format
-            "rescore_logp": rescore_lp,
-
-            # meta
-            "answer_len": int(gen_len),
-            "parsed_json_ok": int(ans_text is not None and len(ans_text) > 0),
-            "parsed_p_true_ok": int(p_model is not None),
-            "is_unknown": int(ans_text.strip().lower() == "unknown"),
-        }
-
-        w.write(json.dumps(row, ensure_ascii=False) + "\n")
-
-    w.close()
-    print(f"[collect] wrote {args.out}")
+    
+    # Process examples
+    print("\nProcessing examples...")
+    with open(args.out, "w") as fout:
+        for idx, example in enumerate(tqdm(dataset, desc="Collecting")):
+            question = example["question"]
+            gold_answers = example["answers"]
+            context = example.get("context", None)
+            
+            # Collect features
+            try:
+                features = collect_features(
+                    model, 
+                    question, 
+                    args.dataset, 
+                    context
+                )
+                
+                # Check correctness
+                parsed_answer = features["parsed_answer"]
+                correct = any(
+                    str(gold).lower() in parsed_answer.lower()
+                    for gold in gold_answers
+                    if parsed_answer
+                )
+                
+                # Write to output
+                output_record = {
+                    "question": question,
+                    "gold_answers": gold_answers,
+                    "context": context,
+                    "correct": int(correct),
+                    **features
+                }
+                
+                fout.write(json.dumps(output_record) + "\n")
+                
+            except Exception as e:
+                print(f"\nError on example {idx}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+    
+    print(f"\n✓ Done! Wrote to: {args.out}")
+    print("="*80)
 
 if __name__ == "__main__":
     main()
