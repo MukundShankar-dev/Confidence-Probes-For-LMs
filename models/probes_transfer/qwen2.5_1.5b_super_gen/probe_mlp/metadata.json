@@ -1,0 +1,15 @@
+{
+  "probe_type": "mlp",
+  "use_hidden": false,
+  "super_generalizable": true,
+  "n_features": 6,
+  "feature_names": [
+    "entropy_mean",
+    "entropy_std",
+    "margin_mean",
+    "margin_min",
+    "lp_mean",
+    "seq_conf"
+  ],
+  "model_path": "models/probes_transfer/qwen2.5_1.5b_super_gen/probe_mlp/probe_model.joblib"
+}

@@ -189,7 +189,13 @@ def collect_features(model, question: str, dataset: str, context: str = None, de
     prompt = build_prompt(question, dataset, context)
     
     # Generate with internals
-    inp, gen = model.generate_with_states(prompt)
+    try:
+        result = model.generate_with_states(prompt)
+        if result is None:
+            raise ValueError("generate_with_states returned None")
+        inp, gen = result
+    except Exception as e:
+        raise RuntimeError(f"generate_with_states failed: {e}\nPrompt: {prompt[:200]}...")
     
     # Extract generated text
     start_pos = inp["input_ids"].shape[-1]
@@ -199,24 +205,33 @@ def collect_features(model, question: str, dataset: str, context: str = None, de
     # Extract answer from standard format
     answer = extract_answer_standard(generated_text, dataset)
     
-    # Get hidden states
-    last_hs = gen.hidden_states[-1]  # Last layer
-    mid_hs = gen.hidden_states[len(gen.hidden_states)//2]  # Middle layer
-    
-    # Last token hidden states
-    h_last = last_hs[-1][0, -1, :] if len(last_hs) > 0 else None
-    h_last_mid = mid_hs[-1][0, -1, :] if len(mid_hs) > 0 else None
-    
-    # Mean-pooled hidden states
-    if len(last_hs) > 0:
-        h_pool = torch.stack([x[0, -1, :] for x in last_hs]).mean(dim=0)
-    else:
-        h_pool = None
-    
-    if len(mid_hs) > 0:
-        h_pool_mid = torch.stack([x[0, -1, :] for x in mid_hs]).mean(dim=0)
-    else:
-        h_pool_mid = None
+    # Get hidden states via teacher-forced forward pass (like original)
+    with torch.no_grad():
+        full_ids = torch.cat([inp["input_ids"].to(device), new_ids.to(device)], dim=-1)
+        attn_mask = torch.ones_like(full_ids)
+        out = model.model(
+            input_ids=full_ids,
+            attention_mask=attn_mask,
+            output_hidden_states=True,
+            use_cache=False,
+            return_dict=True
+        )
+        
+        # Extract hidden states from the generated portion only
+        gen_len = new_ids.shape[-1]
+        
+        # Last layer
+        hs_final = out.hidden_states[-1][0]  # [T, d]
+        h_ans = hs_final[-gen_len:]
+        h_last = h_ans[-1] if h_ans.shape[0] > 0 else None
+        h_pool = h_ans.mean(dim=0) if h_ans.shape[0] > 0 else None
+        
+        # Middle layer
+        mid_ix = len(out.hidden_states) // 2
+        hs_mid = out.hidden_states[mid_ix][0]
+        h_ans_mid = hs_mid[-gen_len:]
+        h_last_mid = h_ans_mid[-1] if h_ans_mid.shape[0] > 0 else None
+        h_pool_mid = h_ans_mid.mean(dim=0) if h_ans_mid.shape[0] > 0 else None
     
     # Pack hidden states to 256 dims
     h_last_256 = pack_256(h_last) if h_last is not None else None
@@ -330,15 +345,42 @@ def main():
     # Load model
     print("\nLoading model...")
     if args.backend == "llama31":
-        model = Llama31_8B(args.model_id, max_new_tokens=args.max_new_tokens)
+        model = Llama31_8B(
+            model_id=args.model_id,
+            dtype="float16",
+            device_map=None,
+            max_new_tokens=args.max_new_tokens,
+            cache_dir=None
+        )
     elif args.backend == "llama32":
-        model = Llama32_11B(args.model_id, max_new_tokens=args.max_new_tokens)
+        model = Llama32_11B(
+            model_id=args.model_id,
+            dtype="float16",
+            device_map=None,
+            max_new_tokens=args.max_new_tokens,
+            cache_dir=None
+        )
     elif args.backend == "qwen":
-        model = Qwen7B(args.model_id, max_new_tokens=args.max_new_tokens)
+        model = Qwen7B(
+            model_id=args.model_id,
+            dtype="float16",
+            device_map=None,
+            max_new_tokens=args.max_new_tokens,
+            cache_dir=None
+        )
     elif args.backend == "gemma":
-        model = Gemma12B(args.model_id, max_new_tokens=args.max_new_tokens)
+        model = Gemma12B(
+            model_id=args.model_id,
+            dtype="float16",
+            device_map=None,
+            max_new_tokens=args.max_new_tokens,
+            cache_dir=None
+        )
     elif args.backend == "gpt":
-        model = GPTOSS(args.model_id, max_new_tokens=args.max_new_tokens)
+        model = GPTOSS(
+            model_id=args.model_id,
+            max_new_tokens=args.max_new_tokens
+        )
     else:
         raise ValueError(f"Unknown backend: {args.backend}")
     
@@ -349,13 +391,19 @@ def main():
     dataset = load_qa(args.dataset, args.split, args.limit)
     print(f"Loaded {len(dataset)} examples")
     
-    # Shard the dataset
+    # Shard the dataset - use select() for HuggingFace Dataset compatibility
     if args.num_shards > 1:
         shard_size = len(dataset) // args.num_shards
         start_idx = args.shard_id * shard_size
         end_idx = start_idx + shard_size if args.shard_id < args.num_shards - 1 else len(dataset)
-        dataset = dataset[start_idx:end_idx]
-        print(f"Processing shard {args.shard_id}: examples {start_idx} to {end_idx}")
+        
+        # Use select() method for HuggingFace Dataset objects
+        if hasattr(dataset, 'select'):
+            dataset = dataset.select(range(start_idx, end_idx))
+        else:
+            dataset = dataset[start_idx:end_idx]
+        
+        print(f"Processing shard {args.shard_id}: examples {start_idx} to {end_idx} ({len(dataset)} rows)")
     
     # Ensure output directory exists
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
@@ -363,10 +411,23 @@ def main():
     # Process examples
     print("\nProcessing examples...")
     with open(args.out, "w") as fout:
-        for idx, example in enumerate(tqdm(dataset, desc="Collecting")):
-            question = example["question"]
-            gold_answers = example["answers"]
+        for idx in tqdm(range(len(dataset)), desc="Collecting"):
+            # Access example properly regardless of dataset type
+            example = dataset[idx]
+            
+            # Handle case where dataset[idx] returns a dict vs a weird format
+            if not isinstance(example, dict):
+                print(f"\nWarning: Unexpected example format at {idx}: {type(example)}")
+                print(f"Example content: {example}")
+                continue
+            
+            question = example.get("question", "")
+            gold_answers = example.get("answers", [])
             context = example.get("context", None)
+            
+            if not question:
+                print(f"\nWarning: Empty question at index {idx}")
+                continue
             
             # Collect features
             try:

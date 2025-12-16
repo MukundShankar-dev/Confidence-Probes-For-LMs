@@ -1,0 +1,8 @@
+[
+  "entropy_mean",
+  "entropy_std",
+  "margin_mean",
+  "margin_min",
+  "lp_mean",
+  "seq_conf"
+]
