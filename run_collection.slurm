@@ -148,42 +148,42 @@ echo "[1/3] Collecting Qwen2.5-1.5B validation data..."
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-1.5B-Instruct" \
-  --dataset triviaqa --split validation \
+  --dataset triviaqa --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe_transfer_standard/qwen2.5_1.5b/triviaqa/val_shard${shard_id}.jsonl
+  --out data/probe_transfer_standard/qwen2.5_1.5b/triviaqa/train_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-1.5B-Instruct" \
-  --dataset hotpotqa --split validation \
+  --dataset hotpotqa --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe_transfer_standard/qwen2.5_1.5b/hotpotqa/val_shard${shard_id}.jsonl
+  --out data/probe_transfer_standard/qwen2.5_1.5b/hotpotqa/train_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-1.5B-Instruct" \
-  --dataset squad_v2 --split validation \
+  --dataset squad_v2 --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe_transfer_standard/qwen2.5_1.5b/squadv2/val_shard${shard_id}.jsonl
+  --out data/probe_transfer_standard/qwen2.5_1.5b/squadv2/train_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-1.5B-Instruct" \
-  --dataset gsm8k --split test \
+  --dataset gsm8k --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe_transfer_standard/qwen2.5_1.5b/gsm8k/val_shard${shard_id}.jsonl
+  --out data/probe_transfer_standard/qwen2.5_1.5b/gsm8k/train_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-1.5B-Instruct" \
-  --dataset mmlu --split validation \
+  --dataset mmlu --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe_transfer_standard/qwen2.5_1.5b/mmlu/val_shard${shard_id}.jsonl
+  --out data/probe_transfer_standard/qwen2.5_1.5b/mmlu/train_shard${shard_id}.jsonl
 
 # --- Qwen3-4B (Cross-Generation, Smaller) ---
 echo ""
@@ -192,42 +192,42 @@ echo "[2/3] Collecting Qwen3-4B validation data..."
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen3-4B-Instruct-2507" \
-  --dataset triviaqa --split validation \
+  --dataset triviaqa --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe_transfer_standard/qwen3_4b/triviaqa/val_shard${shard_id}.jsonl
+  --out data/probe_transfer_standard/qwen3_4b/triviaqa/train_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen3-4B-Instruct-2507" \
-  --dataset hotpotqa --split validation \
+  --dataset hotpotqa --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe_transfer_standard/qwen3_4b/hotpotqa/val_shard${shard_id}.jsonl
+  --out data/probe_transfer_standard/qwen3_4b/hotpotqa/train_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen3-4B-Instruct-2507" \
-  --dataset squad_v2 --split validation \
+  --dataset squad_v2 --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe_transfer_standard/qwen3_4b/squadv2/val_shard${shard_id}.jsonl
+  --out data/probe_transfer_standard/qwen3_4b/squadv2/train_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen3-4B-Instruct-2507" \
-  --dataset gsm8k --split test \
+  --dataset gsm8k --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe_transfer_standard/qwen3_4b/gsm8k/val_shard${shard_id}.jsonl
+  --out data/probe_transfer_standard/qwen3_4b/gsm8k/train_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen3-4B-Instruct-2507" \
-  --dataset mmlu --split validation \
+  --dataset mmlu --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe_transfer_standard/qwen3_4b/mmlu/val_shard${shard_id}.jsonl
+  --out data/probe_transfer_standard/qwen3_4b/mmlu/train_shard${shard_id}.jsonl
 
 # --- Qwen2.5-14B (Same Family, Up-Scaling) ---
 echo ""
@@ -236,42 +236,42 @@ echo "[3/3] Collecting Qwen2.5-14B validation data..."
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-14B-Instruct" \
-  --dataset triviaqa --split validation \
+  --dataset triviaqa --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe_transfer_standard/qwen2.5_14b/triviaqa/val_shard${shard_id}.jsonl
+  --out data/probe_transfer_standard/qwen2.5_14b/triviaqa/train_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-14B-Instruct" \
-  --dataset hotpotqa --split validation \
+  --dataset hotpotqa --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe_transfer_standard/qwen2.5_14b/hotpotqa/val_shard${shard_id}.jsonl
+  --out data/probe_transfer_standard/qwen2.5_14b/hotpotqa/train_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-14B-Instruct" \
-  --dataset squad_v2 --split validation \
+  --dataset squad_v2 --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe_transfer_standard/qwen2.5_14b/squadv2/val_shard${shard_id}.jsonl
+  --out data/probe_transfer_standard/qwen2.5_14b/squadv2/train_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-14B-Instruct" \
-  --dataset gsm8k --split test \
+  --dataset gsm8k --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe_transfer_standard/qwen2.5_14b/gsm8k/val_shard${shard_id}.jsonl
+  --out data/probe_transfer_standard/qwen2.5_14b/gsm8k/train_shard${shard_id}.jsonl
 
 python -m scripts.collect_internals \
   --backend qwen \
   --model_id "Qwen/Qwen2.5-14B-Instruct" \
-  --dataset mmlu --split validation \
+  --dataset mmlu --split train \
   --max_new_tokens 64 \
   --num_shards "$num_shards" --shard_id "$shard_id" \
-  --out data/probe_transfer_standard/qwen2.5_14b/mmlu/val_shard${shard_id}.jsonl
+  --out data/probe_transfer_standard/qwen2.5_14b/mmlu/train_shard${shard_id}.jsonl
 
 echo ""
 echo "========================================================================"

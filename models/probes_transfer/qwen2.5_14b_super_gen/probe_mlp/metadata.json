@@ -11,5 +11,6 @@
     "lp_mean",
     "seq_conf"
   ],
-  "model_path": "models/probes_transfer/qwen2.5_14b_super_gen/probe_mlp/probe_model.joblib"
+  "model_path": "models/probes_transfer/qwen2.5_14b_super_gen/probe_mlp/probe_model.joblib",
+  "optimal_threshold": 0.3400000000000001
 }

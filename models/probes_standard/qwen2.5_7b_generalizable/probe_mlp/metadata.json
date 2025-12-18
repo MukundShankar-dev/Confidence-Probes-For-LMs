@@ -1035,5 +1035,6 @@
     "h_pool_mid_256_254",
     "h_pool_mid_256_255"
   ],
-  "model_path": "models/probes_standard/qwen2.5_7b_generalizable/probe_mlp/probe_model.joblib"
+  "model_path": "models/probes_standard/qwen2.5_7b_generalizable/probe_mlp/probe_model.joblib",
+  "optimal_threshold": 0.42000000000000004
 }

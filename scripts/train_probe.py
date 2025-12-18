@@ -446,13 +446,14 @@ def make_pipeline_tree(max_depth=10, min_samples_leaf=20):
 
 # ------------------------ Evaluation ------------------------
 
-def evaluate_from_proba(proba, y_true, split_name):
+def evaluate_from_proba(proba, y_true, split_name, threshold=0.5):
     """Compute metrics from predicted probabilities"""
     metrics = {"split": split_name, "n": len(y_true)}
     
-    # Basic accuracy
-    y_pred = (proba >= 0.5).astype(int)
+    # Basic accuracy with provided threshold
+    y_pred = (proba >= threshold).astype(int)
     metrics["accuracy"] = float(np.mean(y_pred == y_true))
+    metrics["threshold"] = float(threshold)  # Store threshold used
     
     # Probabilistic metrics
     try:
@@ -580,19 +581,42 @@ def train_and_eval_probe(
     
     split_evals = []
     
+    # Find optimal threshold on validation set
+    console.print("\n[bold]Finding Optimal Threshold[/bold]")
+    if X_va is not None and len(X_va) > 0:
+        from sklearn.metrics import f1_score
+        proba_val = predict_proba(X_va)
+        
+        best_f1 = 0
+        optimal_threshold = 0.5
+        for thresh in np.arange(0.1, 0.9, 0.02):
+            y_pred_thresh = (proba_val >= thresh).astype(int)
+            f1 = f1_score(y_va, y_pred_thresh, zero_division=0)
+            if f1 > best_f1:
+                best_f1 = f1
+                optimal_threshold = thresh
+        
+        console.print(f"  [cyan]→ Optimal threshold: {optimal_threshold:.3f} (val F1={best_f1:.3f})[/cyan]")
+    else:
+        optimal_threshold = 0.5
+        console.print(f"  [yellow]→ No validation set, using default threshold: 0.5[/yellow]")
+    
     def do_eval(X, y, ids, name):
         if X is None or len(X) == 0:
             return
         console.print(f"  [dim]Evaluating on {name}...[/dim]")
         proba = predict_proba(X)
-        metrics = evaluate_from_proba(proba, y, name)
+        
+        # Use optimal threshold instead of 0.5
+        metrics = evaluate_from_proba(proba, y, name, threshold=optimal_threshold)
         split_evals.append(metrics)
         
         # Save predictions
         pd.DataFrame({
             "id": ids,
             "y_true": y,
-            "p_correct": proba
+            "p_correct": proba,
+            "y_pred": (proba >= optimal_threshold).astype(int)
         }).to_csv(probe_dir / f"pred_{name}.csv", index=False)
         
         # Plot curves
@@ -622,6 +646,7 @@ def train_and_eval_probe(
         "n_features": X_tr.shape[1],
         "feature_names": feature_names,
         "model_path": str(model_path),
+        "optimal_threshold": float(optimal_threshold),  # NEW: save threshold
     }
     with open(probe_dir / "metadata.json", "w") as f:
         json.dump(meta, f, indent=2)

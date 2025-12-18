@@ -4,8 +4,8 @@
 #SBATCH --qos=vulcan-scavenger
 #SBATCH --account=vulcan-abhinav
 #SBATCH --gres=gpu:rtxa5000:1
-#SBATCH --mem=128G
-#SBATCH --time=12:00:00
+#SBATCH --mem=64G
+#SBATCH --time=6:00:00
 #SBATCH -o logs/%x_%A_%a.out
 #SBATCH -e logs/%x_%A_%a.err
 #SBATCH --array=0-5
