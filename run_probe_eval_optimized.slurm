@@ -5,7 +5,7 @@
 #SBATCH --account=vulcan-abhinav
 #SBATCH --gres=gpu:rtxa5000:1
 #SBATCH --mem=64G
-#SBATCH --time=4:00:00
+#SBATCH --time=24:00:00
 #SBATCH -o logs/%x_%A_%a.out
 #SBATCH -e logs/%x_%A_%a.err
 #SBATCH --array=0-1
@@ -45,9 +45,9 @@ case $SLURM_ARRAY_TASK_ID in
         --probe_dir models/probes_standard/qwen2.5_7b_generalizable/probe_mlp \
         --datasets triviaqa,hotpotqa,squad_v2,gsm8k,mmlu \
         --output_dir results/baseline/qwen2.5_7b \
-        --limit 1000
+        --debug_first_n 10
     
-    echo "✓ Qwen2.5-7B evaluation complete"
+    echo "Qwen2.5-7B evaluation complete"
     ;;
 
 1)
@@ -60,9 +60,9 @@ case $SLURM_ARRAY_TASK_ID in
         --probe_dir models/probes_standard/llama31_8b_generalizable/probe_mlp \
         --datasets triviaqa,hotpotqa,squad_v2,gsm8k,mmlu \
         --output_dir results/baseline/llama31_8b \
-        --limit 1000
+        --debug_first_n 10
     
-    echo "✓ Llama-3.1-8B evaluation complete"
+    echo "Llama-3.1-8B evaluation complete"
     ;;
 
 *)
