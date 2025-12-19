@@ -1,6 +1,6 @@
 import json
 
-with open("results/transfer/qwen2.5_7b_super_gen/qwen2.5_1.5b/metrics.json") as f:
+with open("results/transfer/qwen2.5_14b_super_gen/qwen2.5_1.5b/metrics.json") as f:
     results = json.load(f)
 
 total_n = sum(r["n"] for r in results)

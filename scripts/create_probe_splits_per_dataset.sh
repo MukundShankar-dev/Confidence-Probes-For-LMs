@@ -18,7 +18,7 @@ echo ""
 
 # TriviaQA only
 echo "Processing: TriviaQA only"
-python -m scripts.make_probe_split_efficient \
+python -m scripts.make_probe_split \
   --root data/probe_standard/qwen2.5_7b/triviaqa \
   --out_dir data/probe_splits_per_dataset/qwen2.5_7b/triviaqa \
   --train_frac 0.70 --val_frac 0.15 --test_frac 0.15 \
@@ -28,7 +28,7 @@ echo ""
 
 # HotpotQA only
 echo "Processing: HotpotQA only"
-python -m scripts.make_probe_split_efficient \
+python -m scripts.make_probe_split \
   --root data/probe_standard/qwen2.5_7b/hotpotqa \
   --out_dir data/probe_splits_per_dataset/qwen2.5_7b/hotpotqa \
   --train_frac 0.70 --val_frac 0.15 --test_frac 0.15 \
@@ -38,7 +38,7 @@ echo ""
 
 # SQuAD-v2 only
 echo "Processing: SQuAD-v2 only"
-python -m scripts.make_probe_split_efficient \
+python -m scripts.make_probe_split \
   --root data/probe_standard/qwen2.5_7b/squadv2 \
   --out_dir data/probe_splits_per_dataset/qwen2.5_7b/squadv2 \
   --train_frac 0.70 --val_frac 0.15 --test_frac 0.15 \
@@ -48,7 +48,7 @@ echo ""
 
 # GSM8K only
 echo "Processing: GSM8K only"
-python -m scripts.make_probe_split_efficient \
+python -m scripts.make_probe_split \
   --root data/probe_standard/qwen2.5_7b/gsm8k \
   --out_dir data/probe_splits_per_dataset/qwen2.5_7b/gsm8k \
   --train_frac 0.70 --val_frac 0.15 --test_frac 0.15 \
@@ -58,7 +58,7 @@ echo ""
 
 # MMLU only
 echo "Processing: MMLU only"
-python -m scripts.make_probe_split_efficient \
+python -m scripts.make_probe_split \
   --root data/probe_standard/qwen2.5_7b/mmlu \
   --out_dir data/probe_splits_per_dataset/qwen2.5_7b/mmlu \
   --train_frac 0.70 --val_frac 0.15 --test_frac 0.15 \
@@ -74,7 +74,7 @@ echo ""
 
 for dataset in triviaqa hotpotqa squadv2 gsm8k mmlu; do
   echo "Processing: $dataset"
-  python -m scripts.make_probe_split_efficient \
+  python -m scripts.make_probe_split \
     --root data/probe_standard/llama31_8b/$dataset \
     --out_dir data/probe_splits_per_dataset/llama31_8b/$dataset \
     --train_frac 0.70 --val_frac 0.15 --test_frac 0.15 \
