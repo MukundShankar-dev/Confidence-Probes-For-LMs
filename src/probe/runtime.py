@@ -1,8 +1,11 @@
-# -*- coding: utf-8 -*-
 import json
 import numpy as np
 import torch
 import torch.nn as nn
+
+"""
+This module is no longer in use... all probe usage is handled by files in scripts/
+"""
 
 class MLP(nn.Module):
     def __init__(self, in_dim, hidden=512, hidden2=256):
@@ -30,8 +33,8 @@ class ProbeRuntime:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device).eval()
 
-        self.vec_keys = self.feature_spec["vector_feats"]    # e.g., ["h_last_256", ...]
-        self.sca_keys = self.feature_spec["scalar_feats"]    # e.g., ["lp_mean", "entropy_mean", ...]
+        self.vec_keys = self.feature_spec["vector_feats"]
+        self.sca_keys = self.feature_spec["scalar_feats"]
         self.packed_dim = int(self.feature_spec.get("packed_dim_each", 256))
 
     def _stack_one(self, row: dict):
@@ -51,7 +54,7 @@ class ProbeRuntime:
         return np.asarray(feats, dtype=np.float32)
 
     def predict(self, feature_row: dict) -> float:
-        x = self._stack_one(feature_row)[None, :]  # [1, D]
+        x = self._stack_one(feature_row)[None, :]
         # standardize with training stats
         x = (x - self.mu) / (self.sd + 1e-8)
         with torch.no_grad():

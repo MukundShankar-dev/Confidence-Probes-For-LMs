@@ -1,22 +1,20 @@
-#!/usr/bin/env python3
 """
-Cross-dataset probe evaluation (efficient)
+Efficient cross-dataset probe evaluation
 
 Key idea:
-- For each dataset, do ONE rollout per example (generate + internal feature extraction).
-- Reuse the same extracted feature dict to score MULTIPLE probes (4 transfer probes),
-  rebuilding X per probe using that probe's feature_names.json (authoritative column order).
+- For each dataset, do one rollout per example (generate + internal feature extraction).
+- Reuse the same extracted feature dict to score all probes (4 transfer probes),
+  rebuilding X per probe using that probe's feature_names.json.
 
-Output structure (same artifacts as eval_probe_optimized.py):
+Output structure:
   output_dir/
     <eval_dataset>/
-      <probe_train_dataset>/         (or probe tag)
+      <probe_train_dataset>/
         predictions.csv
         roc_<eval_dataset>.png
         pr_<eval_dataset>.png
         confusion_<eval_dataset>.png
-        metrics.json                 (single dict for that probe+dataset)
-    summary.json                     (list of all metrics dicts)
+        metrics.json
 """
 
 import argparse
@@ -50,7 +48,6 @@ from sklearn.metrics import (
 
 import matplotlib.pyplot as plt
 
-# Project modules
 from src.models.qwen7b import Qwen7B
 from src.models.llama31_8b import Llama31_8B
 from src.data.datasets import load_qa, squad_em
@@ -503,7 +500,7 @@ def main():
         model = Qwen7B(args.model_id, dtype="float16", device_map="auto")
     else:
         model = Llama31_8B(args.model_id, dtype="float16", device_map="auto")
-    console.print("  [green]✓[/green] Loaded")
+    console.print("  [green]Loaded[\green]")
 
     # Load all probes once
     console.print("\n[bold]Loading Probes[/bold]")
@@ -516,7 +513,7 @@ def main():
             "threshold": thr,
             "feature_names": feature_names,
         }
-        console.print(f"  [green]✓[/green] {train_ds}: {pdir} (thr={thr:.3f}, nfeat={len(feature_names)})")
+        console.print(f"{train_ds}: {pdir} (thr={thr:.3f}, nfeat={len(feature_names)})")
 
     all_metrics = []
 
@@ -618,10 +615,10 @@ def main():
             all_metrics.append(metrics)
 
             console.print(
-                f"  [green]✓[/green] {eval_ds} <- {train_ds} | "
+                f"{eval_ds} <- {train_ds} | "
                 f"Acc={model_acc:.3f} ProbeAcc={probe_acc:.3f} F1={f1:.3f} "
                 f"AUC={auc_roc:.3f}" if auc_roc == auc_roc else
-                f"  [green]✓[/green] {eval_ds} <- {train_ds} | Acc={model_acc:.3f} ProbeAcc={probe_acc:.3f} F1={f1:.3f}"
+                f"{eval_ds} <- {train_ds} | Acc={model_acc:.3f} ProbeAcc={probe_acc:.3f} F1={f1:.3f}"
             )
 
         # Optional debug print for first N examples (same as before) — omitted for brevity
@@ -652,7 +649,7 @@ def main():
     console.print(table)
 
     (output_dir / "summary.json").write_text(json.dumps(all_metrics, indent=2))
-    console.print(f"\n[green]✓[/green] Wrote {output_dir / 'summary.json'}")
+    console.print(f"\nWrote {output_dir / 'summary.json'}")
 
 
 if __name__ == "__main__":

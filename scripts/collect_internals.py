@@ -1,21 +1,14 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Collect internals for a confidence probe - STANDARD PROMPTS VERSION
-- Uses dataset-appropriate standard prompts (no JSON)
-- Captures token-level scores, margins, entropies from logits
-- Runs one teacher-forced forward pass to grab hidden states
-- Extracts answer from standard format output
-- Writes compact features + label (EM) to JSONL
-
-Key change: Uses standard prompts for each dataset type, not JSON format
+Collect internals for a confidence probe using standard prompts (no JSON output parsing)
+- token-level scores, margins, entropies from logits
+- teacher-forced forward pass to get hidden states
+- writes features + label (EM) to JSONL
 """
 import argparse, json, os, re, math, time, sys
 import torch
 from tqdm import tqdm
 from transformers.utils import logging as hf_logging
 
-# === your project modules ===
 from src.data.datasets import load_qa, squad_em, squad_f1
 from src.models.gpt_oss import GPTOSS
 from src.models.qwen7b import Qwen7B
@@ -23,19 +16,19 @@ from src.models.gemma12b import Gemma12B
 from src.models.llama31_8b import Llama31_8B
 from src.models.llama32_11b import Llama32_11B
 
-# ------- speed knobs -------
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
+
 try:
     torch.set_float32_matmul_precision("high")
 except Exception:
     pass
 
 # ========================================================================
-# STANDARD PROMPTS FOR EACH DATASET TYPE
+# STANDARD PROMPTS
 # ========================================================================
 
-# For TriviaQA, HotpotQA - standard open-domain QA
+# For TriviaQA, HotpotQA - open-domain QA
 PROMPT_OPEN_QA = """Answer the following question with a short factual answer (1-5 words).
 
 Q: Who wrote Hamlet?
@@ -50,7 +43,7 @@ A: Mars
 Q: {QUESTION}
 A:"""
 
-# For MMLU - standard multiple choice
+# For MMLU - multiple choice
 PROMPT_MMLU = """Answer the following multiple choice question by outputting only the letter (A, B, C, or D) of the correct answer.
 
 Question: What is the capital of France?
@@ -70,7 +63,7 @@ Answer: B
 {QUESTION}
 Answer:"""
 
-# For GSM8K - standard math problem
+# For GSM8K - math problems
 PROMPT_GSM8K = """Solve the following math problem. Show your reasoning and then provide the final numerical answer.
 
 Q: Janet's ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?
@@ -99,7 +92,6 @@ def build_prompt(question: str, dataset: str, context: str = None) -> str:
     dataset_lower = dataset.lower()
     
     if dataset_lower == "mmlu":
-        # For MMLU, question already contains the choices
         return PROMPT_MMLU.format(QUESTION=question)
     
     elif dataset_lower == "gsm8k":
@@ -109,11 +101,10 @@ def build_prompt(question: str, dataset: str, context: str = None) -> str:
         return PROMPT_SQUADV2.format(CONTEXT=context or "", QUESTION=question)
     
     else:
-        # TriviaQA, HotpotQA, and other open-domain QA
         return PROMPT_OPEN_QA.format(QUESTION=question)
 
 def extract_answer_standard(text: str, dataset: str) -> str:
-    """Extract answer from standard format output (no JSON parsing)"""
+    """Extract answer from output (no JSON parsing)"""
     text = text.strip()
     
     dataset_lower = dataset.lower()
@@ -128,8 +119,6 @@ def extract_answer_standard(text: str, dataset: str) -> str:
     
     elif dataset_lower == "gsm8k":
         # For GSM8K, extract the final number
-        # Look for patterns like "The answer is 18" or just "18"
-        # Try to find number after "answer is" or at the end
         answer_match = re.search(r'(?:answer is|equals?)\s*(\d+(?:\.\d+)?)', text, re.IGNORECASE)
         if answer_match:
             return answer_match.group(1)
@@ -142,7 +131,7 @@ def extract_answer_standard(text: str, dataset: str) -> str:
     
     elif dataset_lower in ("squadv2", "squad_v2", "squad2"):
         # For SQuAD, take first line or sentence
-        # Remove common prefixes like "Answer:" if present
+
         text = re.sub(r'^(?:Answer|A):\s*', '', text, flags=re.IGNORECASE)
         # Take first sentence/line
         first_line = text.split('\n')[0].strip()
@@ -254,17 +243,10 @@ def collect_features(model, question: str, dataset: str, context: str = None, de
         top_probs = []
         
         for i, (logit_row, prob_row) in enumerate(zip(all_logits, all_probs)):
-            # Entropy
             entropies.append(compute_entropy(prob_row))
-            
-            # Margin
             margins.append(compute_margin(logit_row))
-            
-            # Log prob of chosen token
             chosen_id = new_ids[0, i].item()
             lps.append(float(torch.log(prob_row[chosen_id] + 1e-10)))
-            
-            # Top-1 probability
             top_probs.append(float(prob_row.max()))
         
         # Aggregate features
@@ -291,16 +273,16 @@ def collect_features(model, question: str, dataset: str, context: str = None, de
         "margin_min": margin_min,
         "lp_mean": lp_mean,
         "seq_conf": seq_conf,
-        "model_confidence": None,  # Not available in standard format
+        "model_confidence": None,
         
         # Answer metadata
         "answer_len": len(answer.split()),
-        "parsed_json_ok": False,  # N/A for standard format
-        "parsed_p_true_ok": False,  # N/A for standard format
+        "parsed_json_ok": False,
+        "parsed_p_true_ok": False,
         "is_unknown": answer.lower() in ("unknown", "unanswerable"),
         
         # Rescore features (optional, could compute later)
-        "rescore_logp": lp_mean,  # Use mean as proxy
+        "rescore_logp": lp_mean,
         
         # Hidden state features (256-dim each)
         "h_last_256": h_last_256,
@@ -391,13 +373,12 @@ def main():
     dataset = load_qa(args.dataset, args.split, args.limit)
     print(f"Loaded {len(dataset)} examples")
     
-    # Shard the dataset - use select() for HuggingFace Dataset compatibility
+    # Shard the dataset
     if args.num_shards > 1:
         shard_size = len(dataset) // args.num_shards
         start_idx = args.shard_id * shard_size
         end_idx = start_idx + shard_size if args.shard_id < args.num_shards - 1 else len(dataset)
         
-        # Use select() method for HuggingFace Dataset objects
         if hasattr(dataset, 'select'):
             dataset = dataset.select(range(start_idx, end_idx))
         else:
@@ -412,10 +393,8 @@ def main():
     print("\nProcessing examples...")
     with open(args.out, "w") as fout:
         for idx in tqdm(range(len(dataset)), desc="Collecting"):
-            # Access example properly regardless of dataset type
             example = dataset[idx]
             
-            # Handle case where dataset[idx] returns a dict vs a weird format
             if not isinstance(example, dict):
                 print(f"\nWarning: Unexpected example format at {idx}: {type(example)}")
                 print(f"Example content: {example}")
@@ -463,7 +442,7 @@ def main():
                 traceback.print_exc()
                 continue
     
-    print(f"\n✓ Done! Wrote to: {args.out}")
+    print(f"\nDone! Wrote to: {args.out}")
     print("="*80)
 
 if __name__ == "__main__":

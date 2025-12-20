@@ -62,7 +62,7 @@ class Llama31_8B:
         self,
         model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct",
         dtype: str = "float16",
-        device_map: str = None,           # None -> push to CUDA below
+        device_map: str = None,
         max_new_tokens: int = 128,
         cache_dir: str = None,
         use_chat_template: bool = True,
@@ -136,7 +136,7 @@ class Llama31_8B:
             no_repeat_ngram_size=3,
             repetition_penalty=1.05,
             return_dict_in_generate=True,
-            output_scores=True,           # enable logits for entropy/seq_conf
+            output_scores=True,
             output_hidden_states=False,
             pad_token_id=self.tok.eos_token_id,
             eos_token_id=self.tok.eos_token_id,

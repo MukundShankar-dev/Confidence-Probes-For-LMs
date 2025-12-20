@@ -1,5 +1,3 @@
-#!/bin/bash
-# scripts/create_probe_splits.sh
 # Create indexed splits for all collected probe data
 
 set -euo pipefail
@@ -7,9 +5,6 @@ set -euo pipefail
 echo "========================================================================"
 echo "CREATE INDEXED PROBE SPLITS"
 echo "========================================================================"
-echo ""
-echo "This creates train/val/test splits using INDICES (no data duplication)"
-echo "Saves ~400GB of disk space!"
 echo ""
 
 # ==============================================================================
@@ -100,8 +95,4 @@ echo "Each directory contains:"
 echo "  - split_map.json (indices for train/val/test)"
 echo "  - file_index.json (file metadata)"
 echo "  - train_indices.txt, val_indices.txt, test_indices.txt"
-echo ""
-echo "Disk usage: ~50 MB total (vs ~400 GB with data duplication!)"
-echo ""
-echo "Next step: Train probes with train_probes_comprehensive.slurm"
 echo ""

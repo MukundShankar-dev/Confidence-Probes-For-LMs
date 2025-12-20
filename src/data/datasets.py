@@ -51,7 +51,7 @@ def _split_variants(s: str) -> Iterable[str]:
     s = s.strip()
     if not s:
         return []
-    # Common delimiters for multiple answers / aliases
+    # Delimiters for multiple answers / aliases
     parts = re.split(r"\s*[;/,]\s*|\s+or\s+|\s+aka\s+|\s+aka\.\s+", s, flags=re.IGNORECASE)
     out = []
     for p in parts:
@@ -212,7 +212,6 @@ def load_qa(
         # GSM8K math reasoning dataset
         ds = load_dataset("gsm8k", "main", split=split)
         def _fmt(ex):
-            # Answer format: "#### 42" at the end of the solution
             answer_text = ex.get("answer", "")
             # Extract the final numerical answer after "####"
             if "####" in answer_text:

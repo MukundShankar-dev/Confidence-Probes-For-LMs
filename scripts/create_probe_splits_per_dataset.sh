@@ -1,5 +1,3 @@
-#!/bin/bash
-# scripts/create_probe_splits_per_dataset.sh
 # Create splits for INDIVIDUAL datasets (for cross-task generalization studies)
 
 set -euo pipefail
@@ -88,18 +86,4 @@ echo "PER-DATASET SPLITS COMPLETE"
 echo "========================================================================"
 echo ""
 echo "Created splits in: data/probe_splits_per_dataset/"
-echo ""
-echo "Example cross-task study:"
-echo "  1. Train probe on TriviaQA:"
-echo "     python -m scripts.train_probe_updated \\"
-echo "       --data_dir data/probe_splits_per_dataset/qwen2.5_7b/triviaqa \\"
-echo "       --output_dir models/probes_cross_task/qwen_triviaqa_only \\"
-echo "       --probe_type mlp --use_hidden --only_generalizable"
-echo ""
-echo "  2. Evaluate on HotpotQA + SQuAD:"
-echo "     python -m scripts.eval_probe_baseline_v2 \\"
-echo "       --model qwen --model_id 'Qwen/Qwen2.5-7B-Instruct' \\"
-echo "       --probe_dir models/probes_cross_task/qwen_triviaqa_only \\"
-echo "       --datasets hotpotqa,squad_v2 \\"
-echo "       --output_dir results/cross_task/triviaqa_to_others"
 echo ""

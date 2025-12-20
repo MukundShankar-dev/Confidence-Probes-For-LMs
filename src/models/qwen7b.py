@@ -1,7 +1,10 @@
-# src/models/qwen7b.py
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList
 from typing import Dict, Tuple, List
+
+"""
+Despite being named qwen7b.py, this module is actually compatible with all qwen models.
+"""
 
 def _enc(tok, s: str):
     """Encode a literal string to token IDs without specials (safe)."""
@@ -76,7 +79,7 @@ class Qwen7B:
         self,
         model_id: str = "Qwen/Qwen2.5-7B-Instruct",
         dtype: str = "float16",
-        device_map: str = None,      # None -> to("cuda") below
+        device_map: str = None,
         max_new_tokens: int = 128,
         cache_dir: str = None,
         use_chat_template: bool = True,
@@ -148,7 +151,6 @@ class Qwen7B:
                 enc["attention_mask"] = torch.ones_like(enc["input_ids"])
             return enc
 
-    # ---------- public APIs (GPTOSS-compatible) ----------
     @torch.no_grad()
     def generate_with_states(self, prompt: str):
         """
@@ -163,11 +165,11 @@ class Qwen7B:
         gen = self.model.generate(
             **inputs,
             max_new_tokens=self.max_new_tokens,
-            do_sample=False,                 # deterministic for baseline parity
+            do_sample=False,
             no_repeat_ngram_size=3,
             repetition_penalty=1.05,
             return_dict_in_generate=True,
-            output_scores=True,              # enable per-step logits
+            output_scores=True,
             output_hidden_states=False,
             pad_token_id=self.tok.eos_token_id,
             eos_token_id=self.tok.eos_token_id,

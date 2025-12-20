@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Data loader for indexed splits (efficient, no data duplication)
 

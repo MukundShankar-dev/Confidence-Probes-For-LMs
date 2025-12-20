@@ -1,7 +1,3 @@
-# scripts/train_probe.py
-# Multi-probe trainer with plots and artifacts.
-# Updated with super-generalizable features for cross-model transfer (Qwen family)
-
 """
 Usage:
     # Standard training (with hidden states)
@@ -68,11 +64,9 @@ warnings.filterwarnings("ignore")
 
 # All scalar features available in standard prompts data
 SCALAR_KEYS = [
-    # Probability-based features (super-generalizable)
     "entropy_mean", "entropy_std",
     "margin_mean", "margin_min",
     "lp_mean", "seq_conf",
-    # Answer metadata
     "answer_len", "is_unknown",
 ]
 
@@ -83,12 +77,12 @@ VECTOR_KEYS = ["h_last_256", "h_pool_256", "h_last_mid_256", "h_pool_mid_256"]
 # Tier 1: SUPER-GENERALIZABLE (probability-based, format-agnostic, architecture-agnostic)
 # These transfer across model families, sizes, and architectures
 SUPER_GENERALIZABLE_FEATURES = {
-    "entropy_mean",    # Token-level uncertainty
-    "entropy_std",     # Uncertainty variance
-    "margin_mean",     # Confidence margin
-    "margin_min",      # Minimum confidence
-    "lp_mean",         # Log probability
-    "seq_conf",        # Sequence confidence (mean top-1 prob)
+    "entropy_mean",
+    "entropy_std",
+    "margin_mean",
+    "margin_min",
+    "lp_mean",
+    "seq_conf",
 }
 
 # Tier 2: GENERALIZABLE (within same model family, excludes task-specific)
@@ -98,8 +92,8 @@ GENERALIZABLE_FEATURES = SUPER_GENERALIZABLE_FEATURES
 # Tier 3: NON-GENERALIZABLE (task-specific)
 # These may help within-dataset but hurt transfer
 NON_GENERALIZABLE_FEATURES = {
-    "answer_len",      # Dataset-specific (varies by task type)
-    "is_unknown",      # Task-specific (SQuAD v2, indicates "unanswerable")
+    "answer_len",
+    "is_unknown",
 }
 
 # ------------------------ Data Loading ------------------------
@@ -107,10 +101,6 @@ NON_GENERALIZABLE_FEATURES = {
 def load_rows(jsonl_path: Path, show_progress=True, limit=None):
     """
     Load JSONL data with optional progress and limit
-    
-    Supports two modes:
-    1. Direct JSONL file: loads from the file
-    2. Indexed split directory: loads using split indices
     """
     if not jsonl_path or not jsonl_path.exists():
         if show_progress:
@@ -142,7 +132,7 @@ def load_rows(jsonl_path: Path, show_progress=True, limit=None):
                     pass
     
     if show_progress:
-        console.print(f"  [green]✓[/green] Loaded {len(rows):,} rows")
+        console.print(f"Loaded {len(rows):,} rows")
     
     return rows
 
@@ -359,13 +349,13 @@ def build_df(rows, use_hidden=True, label_key="correct", show_progress=True,
         
         if show_progress and (chunk_end % 50000 == 0 or chunk_end == n_rows):
             pct = 100 * chunk_end / n_rows
-            console.print(f"    [green]→[/green] Processed {chunk_end:,}/{n_rows:,} ({pct:.0f}%)")
+            console.print(f"Processed {chunk_end:,}/{n_rows:,} ({pct:.0f}%)")
     
     # Create DataFrame
     df = pd.DataFrame(X, columns=col_names)
     
     if show_progress:
-        console.print(f"  [green]✓[/green] Feature matrix: {df.shape}")
+        console.print(f"Feature matrix: {df.shape}")
     
     return df, y, ids
 
@@ -560,12 +550,12 @@ def train_and_eval_probe(
     # Train
     console.print(f"  [dim]Fitting model...[/dim]")
     model.fit(X_tr, y_tr)
-    console.print(f"  [green]✓[/green] Training complete")
+    console.print(f"Training complete")
     
     # Save model
     model_path = probe_dir / "probe_model.joblib"
     joblib.dump(model, model_path)
-    console.print(f"  [green]✓[/green] Saved model to {model_path.name}")
+    console.print(f"Saved model to {model_path.name}")
     
     # Save feature names
     if feature_names is not None:
@@ -596,15 +586,15 @@ def train_and_eval_probe(
                 best_f1 = f1
                 optimal_threshold = thresh
         
-        console.print(f"  [cyan]→ Optimal threshold: {optimal_threshold:.3f} (val F1={best_f1:.3f})[/cyan]")
+        console.print(f"Optimal threshold: {optimal_threshold:.3f} (val F1={best_f1:.3f})")
     else:
         optimal_threshold = 0.5
-        console.print(f"  [yellow]→ No validation set, using default threshold: 0.5[/yellow]")
+        console.print(f"No validation set, using default threshold: 0.5")
     
     def do_eval(X, y, ids, name):
         if X is None or len(X) == 0:
             return
-        console.print(f"  [dim]Evaluating on {name}...[/dim]")
+        console.print(f"Evaluating on {name}...")
         proba = predict_proba(X)
         
         # Use optimal threshold instead of 0.5
@@ -775,7 +765,7 @@ def main():
         
         # Return in order
         rows = [rows_dict[i] for i in split_indices if i in rows_dict]
-        console.print(f"  [green]✓[/green] Loaded {len(rows):,} rows from {split_name}")
+        console.print(f"Loaded {len(rows):,} rows from {split_name}")
         return rows
     
     # Load all splits
@@ -864,7 +854,7 @@ def main():
             )
     
     console.print(table)
-    console.print(f"\n[green]✓ All probes saved to {output_dir}[/green]")
+    console.print(f"\nAll probes saved to {output_dir}")
 
 
 if __name__ == "__main__":

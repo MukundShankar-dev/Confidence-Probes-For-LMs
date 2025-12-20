@@ -1,22 +1,5 @@
-#!/usr/bin/env python3
 """
-Probe evaluation script (fixed)
-
-Goals:
-- Match feature extraction used during collection (scripts/collect_internals.py):
-  * dataset-appropriate *standard prompts* (few-shot)
-  * generation-time logit statistics from `gen.scores`
-  * teacher-forced forward pass over (prompt + generated tokens) to get hidden states
-  * pack_256 = L2-normalize then take first 256 dims (pad if needed)
-- Match feature organization used during training (scripts/train_probe.py):
-  * scalar keys filtered by only_generalizable / super_generalizable
-  * hidden vectors expanded in a fixed order: h_last_256, h_pool_256, h_last_mid_256, h_pool_mid_256
-  * (OPTIONAL, but recommended) enforce exact `feature_names.json` column order saved at training time
-
-This version fixes the common "X has 1032 features, but imputer expects 1030" error by:
-1) Loading feature_names.json from the probe directory (if present),
-2) Building the evaluation row in *exactly* that column order,
-3) Inferring/overriding (use_hidden, only_generalizable, super_generalizable) from the saved feature set when needed.
+Probe evaluation script. Used for baseline and cross-model tests.
 """
 
 import argparse
@@ -50,7 +33,6 @@ from sklearn.metrics import (
 
 import matplotlib.pyplot as plt
 
-# Project modules
 from src.models.qwen7b import Qwen7B
 from src.models.llama31_8b import Llama31_8B
 from src.data.datasets import load_qa, squad_em
@@ -70,7 +52,7 @@ DATASET_SPLITS = {
 }
 
 # -----------------------------
-# Feature definitions (training)
+# Feature definitions
 # -----------------------------
 SCALAR_KEYS = [
     "entropy_mean", "entropy_std",
@@ -87,7 +69,7 @@ SUPER_GENERALIZABLE_FEATURES = {
 }
 
 # -----------------------------
-# Standard prompts (collection)
+# Standard prompts
 # -----------------------------
 PROMPT_OPEN_QA = """Answer the following question with a short factual answer (1-5 words).
 
@@ -249,8 +231,8 @@ def collect_features(model, question: str, dataset: str, context: Optional[str] 
         gen_len = new_ids.shape[-1]
 
         # Final layer
-        hs_final = out.hidden_states[-1][0]          # [T, d]
-        h_ans = hs_final[-gen_len:]                  # generated portion
+        hs_final = out.hidden_states[-1][0]
+        h_ans = hs_final[-gen_len:]
         h_last = h_ans[-1] if h_ans.shape[0] > 0 else None
         h_pool = h_ans.mean(dim=0) if h_ans.shape[0] > 0 else None
 
@@ -269,7 +251,7 @@ def collect_features(model, question: str, dataset: str, context: Optional[str] 
     # Logit stats from gen.scores (token-level)
     scores = getattr(gen, "scores", []) or []
     if len(scores) > 0:
-        all_logits = torch.stack([s[0] for s in scores], dim=0)  # [L, vocab]
+        all_logits = torch.stack([s[0] for s in scores], dim=0)
         all_probs = torch.softmax(all_logits, dim=-1)
 
         entropies, margins, lps, top_probs = [], [], [], []
@@ -335,7 +317,7 @@ def build_feature_row_dict(features: dict,
     scalar_keys = filter_scalar_keys(only_generalizable, super_generalizable)
 
     feat = {}
-    # IMPORTANT: insertion order must match training (scalars first)
+    # Insertion order must match training (scalars first)
     for k in scalar_keys:
         feat[k] = features.get(k, np.nan)
 
@@ -351,16 +333,14 @@ def build_feature_row_dict(features: dict,
     return feat
 
 def infer_flags_from_feature_names(feature_names: list[str]):
-    """Infer use_hidden / only_generalizable / super_generalizable from saved columns."""
     has_hidden = any(name.startswith("h_last_256_") or name.startswith("h_pool_256_") or
                      name.startswith("h_last_mid_256_") or name.startswith("h_pool_mid_256_")
                      for name in feature_names)
     has_answer_len = "answer_len" in feature_names
     has_is_unknown = "is_unknown" in feature_names
 
-    # only_generalizable/super_generalizable both exclude answer_len+is_unknown
     only_generalizable = not (has_answer_len or has_is_unknown)
-    # super_generalizable also excludes hidden
+
     super_generalizable = only_generalizable and (not has_hidden)
     use_hidden = has_hidden
     return use_hidden, only_generalizable, super_generalizable
@@ -371,14 +351,13 @@ def build_feature_dataframe(features: dict,
                             super_generalizable: bool,
                             feature_names: Optional[List[str]]):
     """
-    Returns a 1-row DataFrame in EXACT training column order.
-    If feature_names is provided, it is authoritative.
+    Returns a 1-row DataFrame in same order as probe training.
+    If feature_names is provided, use that order.
     """
     row = build_feature_row_dict(features, use_hidden, only_generalizable, super_generalizable)
     df = pd.DataFrame([row])
 
     if feature_names is not None:
-        # Add any missing columns as NaN, drop extras, then order
         for c in feature_names:
             if c not in df.columns:
                 df[c] = np.nan
@@ -534,12 +513,12 @@ def main():
         model = Qwen7B(args.model_id, dtype="float16", device_map="auto")
     else:
         model = Llama31_8B(args.model_id, dtype="float16", device_map="auto")
-    console.print("  [green]✓[/green] Loaded")
+    console.print("  [green]Loaded[/green]")
 
     # Load probe
     console.print("\n[bold]Loading Probe[/bold]")
     probe = joblib.load(probe_dir / "probe_model.joblib")
-    console.print("  [green]✓[/green] Loaded probe_model.joblib")
+    console.print("  [green]Loaded probe_model.joblib[/green]")
 
     # Load metadata (threshold + flags)
     metadata = {}
@@ -716,7 +695,7 @@ def main():
 
     # Save metrics json
     (output_dir / "metrics.json").write_text(json.dumps(all_metrics, indent=2))
-    console.print(f"\n[green]✓[/green] Wrote {output_dir / 'metrics.json'}")
+    console.print(f"\nWrote {output_dir / 'metrics.json'}")
 
 if __name__ == "__main__":
     main()
