@@ -24,19 +24,12 @@ LLAMA_PROBE_MAP_JSON="data/llama_cross_dataset_probes.json"
 QWEN_OUT_DIR="results/cross_datasets/qwen"
 LLAMA_OUT_DIR="results/cross_datasets/llama"
 
-LIMIT="100"   # e.g. "200"
-
 source ~/.bashrc
 conda activate llm
 export PYTHONUNBUFFERED=1
 # ===========================
 
 mkdir -p logs
-
-LIMIT_ARGS=()
-if [[ -n "${LIMIT}" ]]; then
-  LIMIT_ARGS+=(--limit "${LIMIT}")
-fi
 
 case "${SLURM_ARRAY_TASK_ID}" in
   0)
@@ -47,7 +40,6 @@ case "${SLURM_ARRAY_TASK_ID}" in
       --datasets "${DATASETS}" \
       --probe_map_json "${QWEN_PROBE_MAP_JSON}" \
       --output_dir "${QWEN_OUT_DIR}" \
-      "${LIMIT_ARGS[@]}"
     ;;
 
   1)
@@ -58,7 +50,6 @@ case "${SLURM_ARRAY_TASK_ID}" in
       --datasets "${DATASETS}" \
       --probe_map_json "${LLAMA_PROBE_MAP_JSON}" \
       --output_dir "${LLAMA_OUT_DIR}" \
-      "${LIMIT_ARGS[@]}"
     ;;
 
   *)

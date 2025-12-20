@@ -1,0 +1,19 @@
+{
+  "model": "qwen",
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "eval_dataset": "squadv2",
+  "train_dataset": "gsm8k",
+  "split": "validation",
+  "n": 11873,
+  "threshold": 0.5,
+  "model_accuracy": 0.15674218815800556,
+  "probe_accuracy": 0.8432578118419944,
+  "probe_precision": 0.0,
+  "probe_recall": 0.0,
+  "probe_f1": 0.0,
+  "auc_roc": 0.4837815792462264,
+  "auc_pr": 0.15415812928368275,
+  "brier": 0.14959278342312746,
+  "log_loss": 0.6015543378443349,
+  "probe_dir": "models/probes_cross_dataset/qwen2.5_7b_gsm8k_only/probe_mlp"
+}

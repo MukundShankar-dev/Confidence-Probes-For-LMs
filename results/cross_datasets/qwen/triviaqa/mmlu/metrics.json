@@ -1,0 +1,19 @@
+{
+  "model": "qwen",
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "eval_dataset": "triviaqa",
+  "train_dataset": "mmlu",
+  "split": "validation",
+  "n": 11313,
+  "threshold": 0.4600000000000001,
+  "model_accuracy": 0.20578095995757092,
+  "probe_accuracy": 0.22089631397507292,
+  "probe_precision": 0.20709898843930635,
+  "probe_recall": 0.9849656357388317,
+  "probe_f1": 0.3422388059701493,
+  "auc_roc": 0.6411027256194459,
+  "auc_pr": 0.3432419982581678,
+  "brier": 0.6222919437643453,
+  "log_loss": 2.28217455342692,
+  "probe_dir": "models/probes_cross_dataset/qwen2.5_7b_mmlu_only/probe_mlp"
+}

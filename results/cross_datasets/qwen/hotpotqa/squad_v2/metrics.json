@@ -1,0 +1,19 @@
+{
+  "model": "qwen",
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "eval_dataset": "hotpotqa",
+  "train_dataset": "squad_v2",
+  "split": "validation",
+  "n": 7405,
+  "threshold": 0.4,
+  "model_accuracy": 0.10141796083727211,
+  "probe_accuracy": 0.8945307224848076,
+  "probe_precision": 0.4431818181818182,
+  "probe_recall": 0.15579227696404793,
+  "probe_f1": 0.23054187192118228,
+  "auc_roc": 0.8924767977933039,
+  "auc_pr": 0.38656694438502626,
+  "brier": 0.07889345593143034,
+  "log_loss": 0.2619390303286739,
+  "probe_dir": "models/probes_cross_dataset/qwen2.5_7b_squadv2_only/probe_mlp"
+}

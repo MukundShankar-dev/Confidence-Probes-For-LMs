@@ -1,0 +1,19 @@
+{
+  "model": "llama",
+  "model_id": "meta-llama/Llama-3.1-8B-Instruct",
+  "eval_dataset": "hotpotqa",
+  "train_dataset": "gsm8k",
+  "split": "validation",
+  "n": 7405,
+  "threshold": 0.5,
+  "model_accuracy": 0.19675894665766375,
+  "probe_accuracy": 0.8032410533423363,
+  "probe_precision": 0.0,
+  "probe_recall": 0.0,
+  "probe_f1": 0.0,
+  "auc_roc": 0.4996867728965608,
+  "auc_pr": 0.19604561777830684,
+  "brier": 0.18021348377824656,
+  "log_loss": 0.6383702848955235,
+  "probe_dir": "models/probes_cross_dataset/llama31_8b_gsm8k_only/probe_mlp"
+}

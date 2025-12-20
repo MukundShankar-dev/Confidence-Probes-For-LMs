@@ -1,0 +1,19 @@
+{
+  "model": "llama",
+  "model_id": "meta-llama/Llama-3.1-8B-Instruct",
+  "eval_dataset": "triviaqa",
+  "train_dataset": "squad_v2",
+  "split": "validation",
+  "n": 11313,
+  "threshold": 0.38,
+  "model_accuracy": 0.6079731282595244,
+  "probe_accuracy": 0.6597719437814903,
+  "probe_precision": 0.7857008111677042,
+  "probe_recall": 0.605553940098866,
+  "probe_f1": 0.6839642006732901,
+  "auc_roc": 0.7415031276297841,
+  "auc_pr": 0.7927508841754982,
+  "brier": 0.25545627119664477,
+  "log_loss": 0.7201491441983423,
+  "probe_dir": "models/probes_cross_dataset/llama31_8b_squadv2_only/probe_mlp"
+}

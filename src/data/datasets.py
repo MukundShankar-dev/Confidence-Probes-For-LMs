@@ -161,7 +161,7 @@ def load_qa(
             }
         ds = ds.map(_fmt, remove_columns=ds.column_names)
 
-    elif name in {"squad_v2", "squad2", "squad2.0"}:
+    elif name in {"squad_v2", "squad2", "squad2.0", "squadv2"}:
         ds = load_dataset("squad_v2", split=split)
 
         def _fmt(ex):
