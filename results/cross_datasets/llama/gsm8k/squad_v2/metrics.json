@@ -1,0 +1,19 @@
+{
+  "model": "llama",
+  "model_id": "meta-llama/Llama-3.1-8B-Instruct",
+  "eval_dataset": "gsm8k",
+  "train_dataset": "squad_v2",
+  "split": "test",
+  "n": 1319,
+  "threshold": 0.38,
+  "model_accuracy": 0.1645185746777862,
+  "probe_accuracy": 0.8354814253222138,
+  "probe_precision": 0.0,
+  "probe_recall": 0.0,
+  "probe_f1": 0.0,
+  "auc_roc": 0.5915846345563575,
+  "auc_pr": 0.20452017236705,
+  "brier": 0.16447324586761422,
+  "log_loss": 1.825613867816227,
+  "probe_dir": "models/probes_cross_dataset/llama31_8b_squadv2_only/probe_mlp"
+}

@@ -37,7 +37,7 @@ case "${SLURM_ARRAY_TASK_ID}" in
     python -m scripts.eval_probe_cross_datasets \
       --model "qwen" \
       --model_id "Qwen/Qwen2.5-7B-Instruct" \
-      --datasets "${DATASETS}" \
+      --datasets "mmlu" \
       --probe_map_json "${QWEN_PROBE_MAP_JSON}" \
       --output_dir "${QWEN_OUT_DIR}" \
     ;;
@@ -47,7 +47,7 @@ case "${SLURM_ARRAY_TASK_ID}" in
     python -m scripts.eval_probe_cross_datasets \
       --model "llama" \
       --model_id "meta-llama/Llama-3.1-8B-Instruct" \
-      --datasets "${DATASETS}" \
+      --datasets "mmlu,gsm8k" \
       --probe_map_json "${LLAMA_PROBE_MAP_JSON}" \
       --output_dir "${LLAMA_OUT_DIR}" \
     ;;
