@@ -1,7 +1,21 @@
-# Confidence Probes for Correctness Estimation in Large Language Models
+# Confidence Probes for Large Language Models
 
-This repository is the codebase to collect data, train confidence probes, and then evaluate these probes on 5 datasets: TriviaQA, SQuAD2.0, TriviaQA, GSM8K, and MMLU. 
-Note that we have used `Python 3.9.23` and a conda environment containing all the libraries defined in our `requirements.txt`.
+Can internal signals from a language model tell us when its answer is likely to be wrong?
+
+We train lightweight MLP probes over hidden states, entropy, and layer trajectories to predict answer correctness across five QA and reasoning datasets and multiple Llama 3.1 / Qwen 2.5 model sizes.
+
+## Key results
+
+- **90% accuracy / 0.97 AUC-ROC** on in-domain correctness prediction
+- **424K examples** across TriviaQA, HotpotQA, SQuAD v2, GSM8K, and MMLU
+- Evaluated models from **1.5B to 14B parameters**
+- Found that confidence signals transfer imperfectly across datasets and models, with threshold brittleness and task mismatch as major failure modes
+
+## Repository structure
+
+This repository contains the data-collection, probe-training, and evaluation pipeline used for the experiments.
+
+Note: we use `Python 3.9.23` and a conda environment containing all the libraries defined in our `requirements.txt`.
 
 ## Step 1: Data Collection
 Data can be collected using the following (example) command:
